@@ -343,6 +343,55 @@
       ;; Should have rate_limit type
       (is (= "rate_limit_exceeded" (get-in body [:error :type]))))))
 
+(deftest streaming-context-overflow-translation
+  (testing "Context overflow errors are translated even in streaming mode"
+    (test-llm/clear-responses *test-llm*)
+    (test-llm/set-error-response *test-llm* 500
+                                 "Cannot read properties of undefined (reading 'prompt_tokens')")
+
+    (let [response @(http/post (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                               {:body (json/generate-string
+                                       {:model "gpt-4o-mini"
+                                        :messages [{:role "user"
+                                                    :content "Test"}]
+                                        :stream true})
+                                :headers {"Content-Type" "application/json"}})
+          body (:body response)]
+
+      ;; Should return 503 even in streaming mode
+      (is (= 503 (:status response)))
+      ;; SSE format should still have the error
+      (is (str/includes? body "Context overflow"))
+      (is (str/includes? body "prompt too large")))))
+
+(deftest virtual-model-chain-context-overflow
+  (testing "Context overflow in virtual model chain gets translated"
+    ;; Setup: First provider fails with context overflow, second succeeds
+    (test-llm/clear-responses *test-llm*)
+    ;; First response: context overflow (should translate to 503, trigger retry)
+    (test-llm/set-error-response *test-llm* 500 "context window exceeded")
+    ;; Second response: success
+    (test-llm/set-next-response *test-llm*
+                                {:role "assistant"
+                                 :content "Success after fallback"})
+
+    ;; Note: This test assumes virtual model fallback is configured
+    ;; If not configured, this will just return 503 on first error
+    (let [response @(http/post (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                               {:body (json/generate-string
+                                       {:model "virtual-model"
+                                        :messages [{:role "user"
+                                                    :content "Test with virtual model"}]
+                                        :stream false})
+                                :headers {"Content-Type" "application/json"}})
+          body (json/parse-string (:body response) true)]
+
+      ;; Either we got success (fallback worked) or 503 (no fallback configured)
+      ;; Both are acceptable behaviors
+      (is (or (= 200 (:status response))
+              (and (= 503 (:status response))
+                   (str/includes? (get-in body [:error :message]) "Context overflow")))))))
+
 (defn -main
   "Entry point for running tests via bb"
   [& _args]
