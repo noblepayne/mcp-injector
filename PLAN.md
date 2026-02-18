@@ -150,9 +150,9 @@ Test with mock Bifrost server returning various error patterns
 
 ## Summary
 
-Successfully implemented robust error translation layer in mcp-injector to handle Bifrost's cryptic context overflow errors.
+Successfully implemented robust error translation layer in mcp-injector to handle Bifrost's cryptic context overflow errors, plus enhanced observability using Bifrost's extra_fields.
 
-### What Was Done
+### Phase 1: Error Translation (Commit 4bbcf56)
 
 1. **Error Detection**: Added `is-context-overflow-error?` function that detects:
    - Bifrost JS errors: "Cannot read properties of undefined (reading 'prompt_tokens')"
@@ -174,6 +174,17 @@ Successfully implemented robust error translation layer in mcp-injector to handl
    - Normal 500 errors unchanged → 502
    - Rate limits unchanged → 429
 
+### Phase 2: Bifrost extra_fields Integration (Commit 6308127)
+
+Leveraged Bifrost's new `extra_fields` to extract upstream provider information:
+
+1. **Provider/Model Extraction**: Capture from `extra_fields.provider` and `extra_fields.model_requested`
+2. **Upstream Error Detection**: Check `extra_fields.raw_response.error` for real upstream error
+3. **Enhanced Logging**: 
+   - Log which provider actually served the request
+   - Log upstream error separately from Bifrost wrapper
+4. **Client Context**: Include provider/model in error responses
+
 ### Test Results
 ```
 Ran 12 tests containing 36 assertions.
@@ -186,10 +197,25 @@ Ran 12 tests containing 36 assertions.
 - **Message format**: Matches OpenClaw's exact format for context overflow errors
 - **Defensive patterns**: Case-insensitive regex covers variations of error messages
 - **Logging**: Original errors preserved in logs for debugging while translated errors sent to client
+- **Extra fields**: Extract upstream error from Bifrost's `raw_response.error` for better detection
+
+### Bifrost extra_fields Structure
+
+```json
+{
+  "extra_fields": {
+    "provider": "nvidia",
+    "model_requested": "moonshotai/kimi-k2-thinking",
+    "raw_response": {
+      "error": {"message": "context window exceeded", ...}
+    }
+  }
+}
+```
 
 ### Files Modified
 
-- `src/mcp_injector/core.clj`: Added error detection, translation, and enhanced logging
+- `src/mcp_injector/core.clj`: Added error detection, translation, extra_fields parsing, enhanced logging
 - `test/mcp_injector/integration_test.clj`: Added 4 new test cases
 - `PLAN.md`: This plan document
 
