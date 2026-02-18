@@ -13,6 +13,9 @@
 
 (def ^:private LLM-TIMEOUT-MS 60000)
 
+;; Usage stats
+(def ^:private usage-stats (atom {}))
+
 (defn- is-context-overflow-error?
   "Detect context overflow errors from upstream providers through Bifrost.
    Covers JavaScript null errors and standard context overflow messages.
@@ -129,7 +132,31 @@
                 parsed-body (json/parse-string response-body true)
                 extra-fields (:extra_fields parsed-body)
                 provider (:provider extra-fields)
-                model-requested (:model_requested extra-fields)]
+                model-requested (:model_requested extra-fields)
+                actual-model (or model-requested (:model parsed-body) (:model request-body))
+                usage (:usage parsed-body)]
+            ;; Track usage stats
+            (when (and actual-model usage)
+              (let [total (or (:total_tokens usage)
+                              (+ (or (:prompt_tokens usage) 0)
+                                 (or (:completion_tokens usage) 0)))
+                    input (or (:prompt_tokens usage) 0)
+                    output (or (:completion_tokens usage) 0)]
+                (swap! usage-stats update actual-model (fn [existing]
+                                                         (let [base {:model actual-model
+                                                                     :requests 0
+                                                                     :total-input-tokens 0
+                                                                     :total-output-tokens 0
+                                                                     :total-tokens 0
+                                                                     :errors 0
+                                                                     :rate-limits 0
+                                                                     :last-updated (System/currentTimeMillis)}]
+                                                           (merge base existing
+                                                                  {:requests (inc (or (:requests existing) 0))
+                                                                   :total-input-tokens (+ input (or (:total-input-tokens existing) 0))
+                                                                   :total-output-tokens (+ output (or (:total-output-tokens existing) 0))
+                                                                   :total-tokens (+ total (or (:total-tokens existing) 0))
+                                                                   :last-updated (System/currentTimeMillis)}))))))
             (log-request "debug" "LLM returned 200"
                          {:url llm-url
                           :provider provider
@@ -146,7 +173,21 @@
                 parsed-body (json/parse-string response-body true)
                 extra-fields (:extra_fields parsed-body)
                 provider (:provider extra-fields)
-                model-requested (:model_requested extra-fields)]
+                model-requested (:model_requested extra-fields)
+                actual-model (or model-requested (:model request-body))]
+            ;; Track rate limit
+            (swap! usage-stats update actual-model (fn [existing]
+                                                     (let [base {:model actual-model
+                                                                 :requests 0
+                                                                 :total-input-tokens 0
+                                                                 :total-output-tokens 0
+                                                                 :total-tokens 0
+                                                                 :errors 0
+                                                                 :rate-limits 0
+                                                                 :last-updated (System/currentTimeMillis)}]
+                                                       (merge base existing
+                                                              {:rate-limits (inc (or (:rate-limits existing) 0))
+                                                               :last-updated (System/currentTimeMillis)}))))
             (log-request "warn" "Rate limited by LLM"
                          {:status 429
                           :url llm-url
@@ -206,6 +247,19 @@
           (do
             (log-request "warn" "LLM returned error"
                          {:status (:status response) :url llm-url})
+            ;; Track error
+            (swap! usage-stats update (:model request-body) (fn [existing]
+                                                              (let [base {:model (:model request-body)
+                                                                          :requests 0
+                                                                          :total-input-tokens 0
+                                                                          :total-output-tokens 0
+                                                                          :total-tokens 0
+                                                                          :errors 0
+                                                                          :rate-limits 0
+                                                                          :last-updated (System/currentTimeMillis)}]
+                                                                (merge base existing
+                                                                       {:errors (inc (or (:errors existing) 0))
+                                                                        :last-updated (System/currentTimeMillis)}))))
             {:success false
              :status 502
              :error {:message (str "LLM error: " (:status response))
@@ -413,19 +467,25 @@
                  :headers {"Content-Type" "application/json"}
                  :body (json/generate-string {:error error-data})}))
             (let [final-content (:content result)
-                  pass-through-tools (:tool-calls result)]
+                  pass-through-tools (:tool-calls result)
+                  final-usage (or (:usage llm-response)
+                                  {:prompt_tokens 0
+                                   :completion_tokens 0
+                                   :total_tokens 0})]
               (if stream-mode
                 (openai/send-sse-response
                  {:content final-content
                   :model model
-                  :tool-calls pass-through-tools})
+                  :tool-calls pass-through-tools
+                  :usage final-usage})
                 {:status 200
                  :headers {"Content-Type" "application/json"}
                  :body (json/generate-string
                         (openai/build-chat-response
                          {:content final-content
                           :model model
-                          :tool-calls pass-through-tools}))}))))
+                          :tool-calls pass-through-tools
+                          :usage final-usage}))}))))
         (let [error-data (:error llm-result)
               status (:status llm-result 500)]
           (if stream-mode
@@ -459,6 +519,11 @@
     {:status 200
      :headers {"Content-Type" "application/json"}
      :body (json/generate-string {:status "ok"})}
+
+    "/stats"
+    {:status 200
+     :headers {"Content-Type" "application/json"}
+     :body (json/generate-string {:stats @usage-stats})}
 
     {:status 404 :body "Not found"}))
 

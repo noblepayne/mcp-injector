@@ -26,7 +26,11 @@
                                           :function {:name (:name tc)
                                                      :arguments (json/generate-string (:arguments tc))}})
                                        (:tool_calls response-data)))}
-              :finish_reason (if (:tool_calls response-data) "tool_calls" "stop")}]})
+              :finish_reason (if (:tool_calls response-data) "tool_calls" "stop")}]
+   :usage (or (:usage response-data)
+              {:prompt_tokens 10
+               :completion_tokens 5
+               :total_tokens 15})})
 
 (defn- build-error-response
   "Build an error response"
@@ -145,6 +149,12 @@
   (set-next-response server
                      {:role "assistant"
                       :tool_calls tool-calls}))
+
+(defn set-response-with-usage
+  "Set a success response with specific usage stats"
+  [server response-data usage]
+  ((:set-response! server) {:type :success
+                            :data (assoc response-data :usage usage)}))
 
 (defn clear-responses
   "Clear all queued responses"
