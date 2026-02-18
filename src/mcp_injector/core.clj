@@ -13,6 +13,42 @@
 
 (def ^:private LLM-TIMEOUT-MS 60000)
 
+(defn- is-context-overflow-error?
+  "Detect context overflow errors from upstream providers through Bifrost.
+   Covers JavaScript null errors and standard context overflow messages.
+   Returns true if error should trigger OpenClaw's compaction/retry."
+  [error-str]
+  (when (string? error-str)
+    (let [patterns [#"(?i)cannot read propert(?:y|ies) of undefined.*prompt"
+                    #"(?i)cannot read propert(?:y|ies) of null.*prompt"
+                    #"(?i)prompt_tokens.*undefined"
+                    #"(?i)prompt_tokens.*null"
+                    #"(?i)context window.*exceeded"
+                    #"(?i)context length.*exceeded"
+                    #"(?i)maximum context.*exceeded"
+                    #"(?i)request.*too large"
+                    #"(?i)prompt is too long"
+                    #"(?i)exceeds model context"
+                    #"(?i)413.*too large"
+                    #"(?i)request size exceeds"]]
+      (some #(re-find % error-str) patterns))))
+
+(defn- translate-error-for-openclaw
+  "Translate upstream errors into OpenClaw-recognizable format.
+   Returns map with :message, :status, and :type."
+  [error-data status-code]
+  (let [error-str (or (get-in error-data [:error :message])
+                      (:message error-data)
+                      (:details error-data)
+                      (str error-data))]
+    (if (is-context-overflow-error? error-str)
+      {:message "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model."
+       :status 503
+       :type "context_overflow"}
+      {:message (or (:message error-data) "Upstream error")
+       :status status-code
+       :type "upstream_error"})))
+
 (def ^:dynamic *log-level* "info")
 
 (def ^:private log-levels {"debug" 0 "info" 1 "warn" 2 "error" 3})
@@ -69,13 +105,15 @@
   "Call LLM LLM gateway with prepared request.
    Returns {:success true :data response} or {:success false :status code :error error-data}"
   [llm-url request-body]
-  (let [request-json (json/generate-string request-body)]
+  (let [request-json (json/generate-string request-body)
+        messages (:messages request-body)]
     (log-request "debug" "Sending request to LLM"
                  {:url llm-url
                   :model (:model request-body)
-                  :has-messages (boolean (seq (:messages request-body)))
-                  :fallbacks-count (count (:fallbacks request-body))
-                  :request_body request-json})
+                  :message-count (count messages)
+                  :total-content-length (reduce + (map #(count (str (:content %))) messages))
+                  :has-tools (boolean (seq (:tools request-body)))
+                  :fallbacks-count (count (:fallbacks request-body))})
     (try
       (let [response @(http-client/post (str llm-url "/v1/chat/completions")
                                         {:body request-json
@@ -116,16 +154,25 @@
                               (json/parse-string response-body true)
                               (catch Exception e
                                 {:raw_body response-body
-                                 :parse_error (.getMessage e)}))]
+                                 :parse_error (.getMessage e)}))
+                error-details (get parsed-body :error parsed-body)
+                error-msg (or (:message error-details)
+                              (:raw_body parsed-body)
+                              (str parsed-body))
+                translated (translate-error-for-openclaw
+                            {:message error-msg :details error-details}
+                            502)]
             (log-request "error" "LLM server error"
                          {:status (:status response)
                           :url llm-url
-                          :error parsed-body})
+                          :error parsed-body
+                          :translated (:message translated)
+                          :is_context_overflow (= "context_overflow" (:type translated))})
             {:success false
-             :status 502
-             :error {:message "Upstream error"
-                     :type "upstream_error"
-                     :status (:status response)
+             :status (:status translated)
+             :error {:message (:message translated)
+                     :type (:type translated)
+                     :original_status (:status response)
                      :details parsed-body}})
 
         ;; Other errors
@@ -149,13 +196,20 @@
                  :details "Request to upstream LLM gateway timed out"}})
 
       (catch Exception e
-        (log-request "error" "Failed to connect to LLM"
-                     {:url llm-url :error (.getMessage e)})
-        {:success false
-         :status 503
-         :error {:message "Failed to reach LLM"
-                 :type "connection_error"
-                 :details (.getMessage e)}}))))
+        (let [error-msg (.getMessage e)
+              translated (translate-error-for-openclaw
+                          {:message error-msg}
+                          503)]
+          (log-request "error" "Failed to connect to LLM"
+                       {:url llm-url
+                        :error error-msg
+                        :translated (:message translated)
+                        :is_context_overflow (= "context_overflow" (:type translated))})
+          {:success false
+           :status (:status translated)
+           :error {:message (:message translated)
+                   :type (:type translated)
+                   :original_error error-msg}})))))
 
 (defn- process-tool-calls
   "Process tool calls from LLM response.
@@ -227,14 +281,17 @@
            last-error nil]
       (if (empty? providers)
         ;; All providers exhausted
-        (do
+        (let [translated (translate-error-for-openclaw last-error 502)]
           (log-request "error" "All providers in virtual chain failed"
                        {:chain chain
-                        :last-error last-error})
+                        :last-error last-error
+                        :translated (:message translated)
+                        :is_context_overflow (= "context_overflow" (:type translated))})
           {:success false
-           :status 502
-           :error {:message "All providers failed"
-                   :type "all_providers_failed"
+           :status (:status translated)
+           :error {:message (:message translated)
+                   :type (:type translated)
+                   :original_type "all_providers_failed"
                    :details last-error}})
 
         ;; Try next provider
