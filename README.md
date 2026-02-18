@@ -1,10 +1,12 @@
 # mcp-injector
 
-> HTTP shim for injecting MCP tools into OpenAI-compatible chat completions
+> Resilient LLM gateway shim with virtual models, provider fallbacks, and MCP tool injection
 
-mcp-injector sits between an agent (like OpenClaw or any OpenAI-compatible client) and LLM gateways (like litellm, bifrost, etc.). It injects MCP tool directories into prompts and implements an agent loop for tool execution.
+mcp-injector sits between an agent (like OpenClaw or any OpenAI-compatible client) and LLM gateways (like litellm, bifrost, etc.). It provides automatic failover across provider chains, translates cryptic errors into actionable messages, and injects MCP tool directories into prompts for agent execution.
 
 ## What It Does
+
+mcp-injector makes your LLM integration resilient. When a provider rate-limits you, it falls back to another. When a provider returns a cryptic error, it translates it into something your agent can handle. And when your agent needs tools, it handles the execution loop.
 
 ```
 ┌─────────────┐     ┌──────────────┐     ┌─────────────┐     ┌─────────────┐
@@ -20,11 +22,12 @@ mcp-injector sits between an agent (like OpenClaw or any OpenAI-compatible clien
 
 **Key Features:**
 
-- ✅ OpenAI-compatible `/v1/chat/completions` endpoint
+- ✅ **Virtual model chains** - Define fallback providers with cooldowns (e.g., try zen first, fall back to nvidia)
+- ✅ **Error translation** - Converts "Cannot read properties of undefined" into "Context overflow: prompt too large"
+- ✅ **Smart retry logic** - Retries on 429/500, propagates 503 to trigger compression
 - ✅ MCP tool directory injection into system prompts
 - ✅ Agent loop with tool execution (LLM → tools → LLM...)
-- ✅ SSE streaming responses for agents (like OpenClaw) compatibility
-- ✅ Support for `get_tool_schema` meta-tool
+- ✅ SSE streaming responses for OpenAI-compatible clients
 - ✅ Real HTTP integration tests (no mocks)
 - ✅ Babashka-based for fast startup (~100MB binary)
 
@@ -63,8 +66,22 @@ Create `mcp-servers.edn`:
     :tools ["retrieve_customer" "list_charges"]}
    :postgres
    {:url "http://localhost:3002/mcp"
-    :tools ["query" "execute"]}}}
-```
+    :tools ["query" "execute"]}}
+
+ ;; LLM gateway with virtual models and fallbacks
+ :llm-gateway
+ {:url "http://localhost:8080"
+
+  ;; Virtual model with provider chain
+  :virtual-models
+  {:smart-model
+   {:chain ["provider-a/model-1"
+            "provider-b/model-1"
+            "provider-c/model-1"]
+    :cooldown-minutes 5
+    ;; Retry on rate limits (429) and server errors (500)
+    ;; Don't retry on 503 (context overflow) - let agent compress instead
+    :retry-on [429 500]}}}}
 
 Set environment variables (optional):
 
@@ -101,8 +118,10 @@ curl -X POST http://localhost:8080/v1/chat/completions \
 ### Data Flow
 
 1. **Request**: Agent sends request with `stream=true`
-1. **Tool Injection**: mcp-injector adds MCP tool directory to system prompt
+1. **Virtual Model Resolution**: Map virtual model to provider chain with fallbacks
+1. **Tool Injection**: Add MCP tool directory to system prompt
 1. **LLM Call**: Forward to LLM gateway with `stream=false`
+1. **Error Handling**: Translate cryptic errors, retry on 429/500, cooldown on failure
 1. **Tool Detection**: Check LLM response for `tool_calls`
 1. **Tool Execution**: Call MCP servers, get results
 1. **Loop**: Send results back to LLM, repeat until no more tools
@@ -193,30 +212,26 @@ mcp-injector/
 └── AGENTS.md           # Development guidelines
 ```
 
-## Roadmap
+## Features
 
-### Phase 1: Core Runtime ✅ COMPLETE
+**Implemented:**
 
-- [x] HTTP server with OpenAI-compatible endpoint
-- [x] MCP tool directory injection
-- [x] Agent loop with tool execution
-- [x] SSE streaming
-- [x] Integration tests
+- ✅ HTTP server with OpenAI-compatible endpoint
+- ✅ Virtual model chains with automatic failover
+- ✅ Provider cooldown after failures
+- ✅ Error translation (Bifrost JS errors → user-friendly messages)
+- ✅ Smart retry logic (429/500 retry, 503 propagate)
+- ✅ MCP tool directory injection
+- ✅ Agent loop with tool execution
+- ✅ SSE streaming
+- ✅ Real HTTP integration tests (14 tests, 40 assertions)
 
-### Phase 2: Progressive Discovery
+**Future:**
 
-- [ ] MCP directory injection (compact format)
-- [ ] Schema caching
-- [ ] `get_tool_schema` optimization
-- [ ] Tool categorization (full vs lazy)
-
-### Phase 3: Production Hardening
-
-- [ ] Error handling & retries
-- [ ] Timeouts
-- [ ] Rate limiting
+- [ ] Schema caching for faster startup
+- [ ] Tool categorization (full vs lazy injection)
 - [ ] Observability (OpenTelemetry)
-- [ ] Metrics & logging
+- [ ] Request/response metrics
 
 ## License
 
@@ -228,4 +243,4 @@ See `AGENTS.md` for development guidelines and `dev/` for project tracking.
 
 ______________________________________________________________________
 
-**Status**: Phase 1 Complete | **Tests**: 7 passing, 17 assertions | **Built with**: Babashka + http-kit + Cheshire
+**Status**: Production-ready | **Tests**: 14 passing, 40 assertions | **Built with**: Babashka + http-kit + Cheshire
