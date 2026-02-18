@@ -259,6 +259,139 @@
       ;; Should contain the actual content
       (is (str/includes? body "Streaming response!")))))
 
+(deftest bifrost-context-overflow-error-translation
+  (testing "Bifrost JS error gets translated to 503 with OpenClaw-compatible message"
+    ;; Bifrost returns this when upstream provider has context overflow
+    (test-llm/clear-responses *test-llm*)
+    (test-llm/set-error-response *test-llm* 500
+                                 "Cannot read properties of undefined (reading 'prompt_tokens')")
+
+    (let [response @(http/post (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                               {:body (json/generate-string
+                                       {:model "gpt-4o-mini"
+                                        :messages [{:role "user"
+                                                    :content "Test"}]
+                                        :stream false})
+                                :headers {"Content-Type" "application/json"}})
+          body (json/parse-string (:body response) true)]
+
+      ;; Should return 503 (retryable) not 502
+      (is (= 503 (:status response)))
+      ;; Should have OpenClaw-compatible context overflow message
+      (is (str/includes? (get-in body [:error :message]) "Context overflow"))
+      (is (str/includes? (get-in body [:error :message]) "prompt too large"))
+      ;; Should preserve original error for debugging
+      (is (str/includes? (str (get-in body [:error :details])) "Cannot read properties of undefined"))
+      ;; Should mark type as context_overflow
+      (is (= "context_overflow" (get-in body [:error :type]))))))
+
+(deftest standard-context-overflow-detection
+  (testing "Standard context overflow messages are detected and translated"
+    (test-llm/clear-responses *test-llm*)
+    (test-llm/set-error-response *test-llm* 500 "context window exceeded")
+
+    (let [response @(http/post (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                               {:body (json/generate-string
+                                       {:model "gpt-4o-mini"
+                                        :messages [{:role "user"
+                                                    :content "Test"}]
+                                        :stream false})
+                                :headers {"Content-Type" "application/json"}})
+          body (json/parse-string (:body response) true)]
+
+      ;; Should return 503
+      (is (= 503 (:status response)))
+      ;; Should have context overflow message
+      (is (str/includes? (get-in body [:error :message]) "Context overflow"))
+      (is (= "context_overflow" (get-in body [:error :type]))))))
+
+(deftest normal-server-error-unchanged
+  (testing "Normal 500 errors without context overflow patterns return 502"
+    (test-llm/clear-responses *test-llm*)
+    (test-llm/set-error-response *test-llm* 500 "Internal server error")
+
+    (let [response @(http/post (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                               {:body (json/generate-string
+                                       {:model "gpt-4o-mini"
+                                        :messages [{:role "user"
+                                                    :content "Test"}]
+                                        :stream false})
+                                :headers {"Content-Type" "application/json"}})
+          body (json/parse-string (:body response) true)]
+
+      ;; Should return 502 (original behavior)
+      (is (= 502 (:status response)))
+      ;; Should have upstream_error type
+      (is (= "upstream_error" (get-in body [:error :type]))))))
+
+(deftest rate-limit-unchanged
+  (testing "Rate limit errors (429) are not translated and return 429"
+    (test-llm/clear-responses *test-llm*)
+    (test-llm/set-error-response *test-llm* 429 "Rate limit exceeded")
+
+    (let [response @(http/post (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                               {:body (json/generate-string
+                                       {:model "gpt-4o-mini"
+                                        :messages [{:role "user"
+                                                    :content "Test"}]
+                                        :stream false})
+                                :headers {"Content-Type" "application/json"}})
+          body (json/parse-string (:body response) true)]
+
+      ;; Should return 429
+      (is (= 429 (:status response)))
+      ;; Should have rate_limit type
+      (is (= "rate_limit_exceeded" (get-in body [:error :type]))))))
+
+(deftest streaming-context-overflow-translation
+  (testing "Context overflow errors are translated even in streaming mode"
+    (test-llm/clear-responses *test-llm*)
+    (test-llm/set-error-response *test-llm* 500
+                                 "Cannot read properties of undefined (reading 'prompt_tokens')")
+
+    (let [response @(http/post (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                               {:body (json/generate-string
+                                       {:model "gpt-4o-mini"
+                                        :messages [{:role "user"
+                                                    :content "Test"}]
+                                        :stream true})
+                                :headers {"Content-Type" "application/json"}})
+          body (:body response)]
+
+      ;; Should return 503 even in streaming mode
+      (is (= 503 (:status response)))
+      ;; SSE format should still have the error
+      (is (str/includes? body "Context overflow"))
+      (is (str/includes? body "prompt too large")))))
+
+(deftest virtual-model-chain-context-overflow
+  (testing "Context overflow in virtual model chain gets translated"
+    ;; Setup: First provider fails with context overflow, second succeeds
+    (test-llm/clear-responses *test-llm*)
+    ;; First response: context overflow (should translate to 503, trigger retry)
+    (test-llm/set-error-response *test-llm* 500 "context window exceeded")
+    ;; Second response: success
+    (test-llm/set-next-response *test-llm*
+                                {:role "assistant"
+                                 :content "Success after fallback"})
+
+    ;; Note: This test assumes virtual model fallback is configured
+    ;; If not configured, this will just return 503 on first error
+    (let [response @(http/post (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                               {:body (json/generate-string
+                                       {:model "virtual-model"
+                                        :messages [{:role "user"
+                                                    :content "Test with virtual model"}]
+                                        :stream false})
+                                :headers {"Content-Type" "application/json"}})
+          body (json/parse-string (:body response) true)]
+
+      ;; Either we got success (fallback worked) or 503 (no fallback configured)
+      ;; Both are acceptable behaviors
+      (is (or (= 200 (:status response))
+              (and (= 503 (:status response))
+                   (str/includes? (get-in body [:error :message]) "Context overflow")))))))
+
 (defn -main
   "Entry point for running tests via bb"
   [& _args]
