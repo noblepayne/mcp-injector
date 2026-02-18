@@ -1,5 +1,5 @@
 {
-  description = "Situated Agent Runtime - Production-ready agent orchestration for business automation";
+  description = "mcp-injector - HTTP shim for injecting MCP tools into OpenAI-compatible chat completions";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -15,12 +15,10 @@
       system: let
         pkgs = nixpkgs.legacyPackages.${system};
 
-        # Babashka is already in nixpkgs
         babashka = pkgs.babashka;
 
-        # Build the SAR package
-        sar = pkgs.stdenv.mkDerivation {
-          pname = "situated-agent-runtime";
+        mcp-injector = pkgs.stdenv.mkDerivation {
+          pname = "mcp-injector";
           version = "0.1.0";
 
           src = ./.;
@@ -29,74 +27,70 @@
           buildInputs = [babashka];
 
           installPhase = ''
-            mkdir -p $out/bin $out/share/sar
+            mkdir -p $out/bin $out/share/mcp-injector
 
-            # Copy source files
-            cp -r src $out/share/sar/
-            cp -r skills $out/share/sar/
-            cp bb.edn $out/share/sar/
-            cp mcp-servers.edn $out/share/sar/
+            cp -r src $out/share/mcp-injector/
+            cp bb.edn $out/share/mcp-injector/
+            cp mcp-servers.edn $out/share/mcp-injector/
 
-            # Create wrapper script
-            makeWrapper ${babashka}/bin/bb $out/bin/sar \
-              --add-flags "-f $out/share/sar/src/sar/core.clj" \
-              --set SAR_HOME "$out/share/sar"
+            # Use bb run with exec to run the serve task from bb.edn
+            # - Add babashka bin to PATH so bb is available at runtime
+            makeWrapper ${babashka}/bin/bb $out/bin/mcp-injector \
+              --prefix PATH : ${babashka}/bin \
+              --run "cd $out/share/mcp-injector && exec bb run serve" \
+              --set MCP_INJECTOR_HOME "$out/share/mcp-injector"
           '';
 
           meta = with pkgs.lib; {
-            description = "Situated Agent Runtime for business automation";
-            homepage = "https://github.com/yourusername/situated-agent-runtime";
+            description = "HTTP shim for injecting MCP tools into OpenAI-compatible chat completions";
+            homepage = "https://github.com/anomalyco/mcp-injector";
             license = licenses.mit;
             maintainers = [];
             platforms = platforms.unix;
           };
         };
       in {
-        # Package output
         packages = {
-          default = sar;
-          situated-agent-runtime = sar;
+          default = mcp-injector;
         };
 
-        # Development shell
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             babashka
             clojure
-            clj-kondo # Linter
-	    cljfmt
-	    mdformat
+            clj-kondo
+            cljfmt
+            mdformat
           ];
 
           shellHook = ''
-            echo "🤖 Situated Agent Runtime Dev Environment"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "mcp-injector Dev Environment"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo "Babashka version: $(bb --version)"
             echo ""
             echo "Quick start:"
-            echo "  bb run          - Start the runtime"
+            echo "  bb run          - Start the server"
             echo "  bb test         - Run tests"
             echo "  bb repl         - Start REPL"
             echo ""
-
-            # Set up local config
-            export SAR_HOME="$PWD"
-            export SAR_PORT="''${SAR_PORT: -8080}"
-            export SAR_LOG_LEVEL="''${SAR_LOG_LEVEL: -info}"
+            echo "  nix build       - Build the package"
+            echo "  nix run         - Run the built package"
+            echo ""
           '';
         };
 
-        # Apps for easy running
         apps = {
           default = {
             type = "app";
-            program = "${sar}/bin/sar";
+            program = "${mcp-injector}/bin/mcp-injector";
+            meta = {
+              description = "Start mcp-injector server";
+            };
           };
         };
       }
     )
     // {
-      # NixOS module
       nixosModules.default = {
         config,
         lib,
@@ -104,21 +98,23 @@
         ...
       }:
         with lib; let
-          cfg = config.services.situated-agent-runtime;
+          cfg = config.services.mcp-injector;
 
-          # Get the package from this flake
-          sar-pkg = self.packages.${pkgs.system}.default;
+          mcp-injector-pkg = self.packages.${pkgs.system}.default;
 
-          # Configuration file for MCP servers
-          mcpServersConfig = pkgs.writeText "mcp-servers.edn" (builtins.toJSON cfg.mcpServers);
+          mcpServersConfig = pkgs.runCommand "mcp-servers.edn" {
+            nativeBuildInputs = [pkgs.jet];
+          } ''
+            echo '${builtins.toJSON cfg.mcpServers}' | jet -i json -o edn -k > $out
+          '';
         in {
-          options.services.situated-agent-runtime = {
-            enable = mkEnableOption "Situated Agent Runtime";
+          options.services.mcp-injector = {
+            enable = mkEnableOption "mcp-injector HTTP server";
 
             port = mkOption {
               type = types.port;
-              default = 8080;
-              description = "Port for the SAR HTTP server";
+              default = 8088;
+              description = "Port for the mcp-injector HTTP server";
             };
 
             host = mkOption {
@@ -127,10 +123,10 @@
               description = "Host address to bind to";
             };
 
-            bifrostUrl = mkOption {
+            llmUrl = mkOption {
               type = types.str;
-              default = "http://localhost:8081";
-              description = "URL of Bifrost or OpenAI-compatible LLM endpoint";
+              default = "http://localhost:8080";
+              description = "URL of OpenAI-compatible LLM endpoint";
             };
 
             mcpServers = mkOption {
@@ -153,12 +149,6 @@
               '';
             };
 
-            skillsDir = mkOption {
-              type = types.path;
-              default = "${sar-pkg}/share/sar/skills";
-              description = "Directory containing skill definitions";
-            };
-
             logLevel = mkOption {
               type = types.enum ["debug" "info" "warn" "error"];
               default = "info";
@@ -171,73 +161,76 @@
               description = "Maximum agent loop iterations";
             };
 
+            timeoutMs = mkOption {
+              type = types.int;
+              default = 1800000;
+              description = "Request timeout in milliseconds";
+            };
+
             user = mkOption {
               type = types.str;
-              default = "sar";
+              default = "mcp-injector";
               description = "User to run the service as";
             };
 
             group = mkOption {
               type = types.str;
-              default = "sar";
+              default = "mcp-injector";
               description = "Group to run the service as";
             };
 
             openFirewall = mkOption {
               type = types.bool;
               default = false;
-              description = "Open firewall port for SAR";
+              description = "Open firewall port for mcp-injector";
             };
           };
 
           config = mkIf cfg.enable {
-            # Create user and group
             users.users.${cfg.user} = {
               isSystemUser = true;
               group = cfg.group;
-              description = "Situated Agent Runtime user";
+              description = "mcp-injector service user";
             };
 
             users.groups.${cfg.group} = {};
 
-            # Systemd service
-            systemd.services.situated-agent-runtime = {
-              description = "Situated Agent Runtime";
+            systemd.services.mcp-injector = {
+              description = "mcp-injector HTTP server";
               wantedBy = ["multi-user.target"];
               after = ["network.target"];
 
               environment = {
-                SAR_PORT = toString cfg.port;
-                SAR_HOST = cfg.host;
-                SAR_BIFROST_URL = cfg.bifrostUrl;
-                SAR_LOG_LEVEL = cfg.logLevel;
-                SAR_MAX_ITERATIONS = toString cfg.maxIterations;
-                SAR_SKILLS_DIR = cfg.skillsDir;
-                SAR_MCP_CONFIG = mcpServersConfig;
+                HOME = "/var/lib/mcp-injector";
+                JAVA_TOOL_OPTIONS = "-Duser.home=/var/lib/mcp-injector";
+                MCP_INJECTOR_PORT = toString cfg.port;
+                MCP_INJECTOR_HOST = cfg.host;
+                MCP_INJECTOR_LLM_URL = cfg.llmUrl;
+                MCP_INJECTOR_LOG_LEVEL = cfg.logLevel;
+                MCP_INJECTOR_MAX_ITERATIONS = toString cfg.maxIterations;
+                MCP_INJECTOR_TIMEOUT_MS = toString cfg.timeoutMs;
+                MCP_INJECTOR_MCP_CONFIG = mcpServersConfig;
               };
 
               serviceConfig = {
                 Type = "simple";
                 User = cfg.user;
                 Group = cfg.group;
-                ExecStart = "${sar-pkg}/bin/sar";
+                ExecStart = "${mcp-injector-pkg}/bin/mcp-injector";
                 Restart = "on-failure";
                 RestartSec = "5s";
+                StateDirectory = "mcp-injector";
 
-                # Hardening
                 NoNewPrivileges = true;
                 PrivateTmp = true;
                 ProtectSystem = "strict";
                 ProtectHome = true;
-                ReadOnlyPaths = [cfg.skillsDir];
 
-                # Resource limits
                 MemoryMax = "2G";
                 TasksMax = 100;
               };
             };
 
-            # Firewall
             networking.firewall.allowedTCPPorts = mkIf cfg.openFirewall [cfg.port];
           };
         };

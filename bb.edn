@@ -1,0 +1,39 @@
+{:paths ["src" "test"]
+ :deps {http-kit/http-kit {:mvn/version "2.8.0"}
+        cheshire/cheshire {:mvn/version "5.13.0"}}
+
+ :tasks
+ {test {:doc "Run all tests"
+        :requires ([clojure.test :as t])
+        :task (do
+                (require 'mcp-injector.integration-test)
+                (let [{:keys [fail error]} (t/run-tests 'mcp-injector.integration-test)]
+                  (when (pos? (+ fail error))
+                    (System/exit 1))))}
+
+  lint {:doc "Run clj-kondo linter"
+        :task (shell "clj-kondo --lint src/ test/")}
+
+  format {:doc "Format code with cljfmt"
+          :task (shell "cljfmt fix src/ test/")}
+
+  format-check {:doc "Check formatting without changes"
+                :task (shell "cljfmt check src/ test/")}
+
+  ci {:doc "Run full CI pipeline (lint, format-check, test)"
+      :task (do
+              (run 'lint)
+              (run 'format-check)
+              (run 'test)
+              (run 'test-virtual))}
+
+  test-virtual {:doc "Run virtual model tests"
+                :requires ([clojure.test :as t])
+                :task (do
+                        (require 'mcp-injector.virtual-model-test)
+                        (let [{:keys [fail error]} (t/run-tests 'mcp-injector.virtual-model-test)]
+                          (when (pos? (+ fail error))
+                            (System/exit 1))))}
+
+  serve {:doc "Start the mcp-injector server"
+         :task (exec 'mcp-injector.core/-main)}}}

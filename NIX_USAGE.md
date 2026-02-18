@@ -1,4 +1,4 @@
-# Nix Usage Guide for Situated Agent Runtime
+# Nix Usage Guide for mcp-injector
 
 ## Quick Start
 
@@ -8,7 +8,7 @@
 # Enter dev shell
 nix develop
 
-# Start the runtime
+# Start the server
 bb run
 
 # Run tests
@@ -35,21 +35,21 @@ nix profile install
 
 ### Basic Configuration
 
-Add to your `configuration.nix`:
+Add to your `flake.nix`:
 
 ```nix
 {
-  inputs.sar.url = "github:yourusername/situated-agent-runtime";
+  inputs.mcp-injector.url = "github:anomalyco/mcp-injector";
   
-  outputs = { self, nixpkgs, sar }: {
+  outputs = { self, nixpkgs, mcp-injector }: {
     nixosConfigurations.yourhostname = nixpkgs.lib.nixosSystem {
       modules = [
-        sar.nixosModules.default
+        mcp-injector.nixosModules.default
         {
-          services.situated-agent-runtime = {
+          services.mcp-injector = {
             enable = true;
-            port = 8080;
-            bifrostUrl = "http://localhost:8081";
+            port = 8088;
+            llmUrl = "http://localhost:8081";
           };
         }
       ];
@@ -64,16 +64,16 @@ Add to your `configuration.nix`:
 { config, pkgs, ... }:
 
 {
-  services.situated-agent-runtime = {
+  services.mcp-injector = {
     enable = true;
     
     # Network settings
-    port = 8080;
+    port = 8088;
     host = "0.0.0.0";  # Bind to all interfaces
     openFirewall = true;
     
     # LLM endpoint
-    bifrostUrl = "http://bifrost.internal:8081";
+    llmUrl = "http://llm.internal:8081";
     
     # MCP server configurations
     mcpServers = {
@@ -111,31 +111,29 @@ Add to your `configuration.nix`:
       };
     };
     
-    # Custom skills directory
-    skillsDir = ./skills;
-    
     # Runtime configuration
     logLevel = "info";
     maxIterations = 10;
+    timeoutMs = 1800000;
     
     # Service user
-    user = "sar";
-    group = "sar";
+    user = "mcp-injector";
+    group = "mcp-injector";
   };
   
   # Reverse proxy with Caddy (optional)
   services.caddy = {
     enable = true;
-    virtualHosts."sar.example.com".extraConfig = ''
-      reverse_proxy localhost:8080
+    virtualHosts."mcp-injector.example.com".extraConfig = ''
+      reverse_proxy localhost:8088
     '';
   };
   
   # Monitoring (optional)
   services.prometheus.scrapeConfigs = [{
-    job_name = "sar";
+    job_name = "mcp-injector";
     static_configs = [{
-      targets = [ "localhost:8080" ];
+      targets = [ "localhost:8088" ];
     }];
   }];
 }
@@ -148,11 +146,11 @@ Add to your `configuration.nix`:
 { config, pkgs, ... }:
 
 {
-  services.situated-agent-runtime = {
+  services.mcp-injector = {
     enable = true;
-    port = 8080;
+    port = 8088;
     host = "127.0.0.1";
-    bifrostUrl = "http://localhost:8081";
+    llmUrl = "http://localhost:8081";
     logLevel = "debug";
     
     mcpServers = {
@@ -179,7 +177,7 @@ nix build .#dockerImage
 docker load < result
 
 # Run
-docker run -p 8080:8080 situated-agent-runtime:latest
+docker run -p 8088:8088 mcp-injector:latest
 ```
 
 Add to `flake.nix` for Docker support:
@@ -187,19 +185,19 @@ Add to `flake.nix` for Docker support:
 ```nix
 # In outputs, add:
 dockerImage = pkgs.dockerTools.buildLayeredImage {
-  name = "situated-agent-runtime";
+  name = "mcp-injector";
   tag = "latest";
   
-  contents = [ sar ];
+  contents = [ mcp-injector ];
   
   config = {
-    Cmd = [ "${sar}/bin/sar" ];
+    Cmd = [ "${mcp-injector}/bin/mcp-injector" ];
     ExposedPorts = {
-      "8080/tcp" = {};
+      "8088/tcp" = {};
     };
     Env = [
-      "SAR_PORT=8080"
-      "SAR_HOST=0.0.0.0"
+      "MCP_INJECTOR_PORT=8088"
+      "MCP_INJECTOR_HOST=0.0.0.0"
     ];
   };
 };
@@ -213,17 +211,17 @@ dockerImage = pkgs.dockerTools.buildLayeredImage {
 { config, pkgs, ... }:
 
 {
-  # SAR service
-  services.situated-agent-runtime = {
+  # mcp-injector service
+  services.mcp-injector = {
     enable = true;
-    port = 8080;
-    bifrostUrl = "http://localhost:8081";
+    port = 8088;
+    llmUrl = "http://localhost:8081";
     openFirewall = false;  # Use Tailscale/VPN instead
   };
   
-  # Run Bifrost alongside
-  virtualisation.oci-containers.containers.bifrost = {
-    image = "bifrost:latest";
+  # Run LLM gateway alongside
+  virtualisation.oci-containers.containers.llm = {
+    image = "llm:latest";
     ports = [ "8081:8080" ];
   };
   
@@ -254,8 +252,8 @@ dockerImage = pkgs.dockerTools.buildLayeredImage {
 { config, pkgs, lib, ... }:
 
 let
-  mkSarInstance = name: port: mcpServers: {
-    "situated-agent-runtime-${name}" = {
+  mkMcpInjectorInstance = name: port: mcpServers: {
+    "mcp-injector-${name}" = {
       enable = true;
       port = port;
       mcpServers = mcpServers;
@@ -264,13 +262,13 @@ let
 in {
   services = lib.mkMerge [
     # Production instance
-    (mkSarInstance "prod" 8080 {
+    (mkMcpInjectorInstance "prod" 8088 {
       stripe = { /* ... */ };
       postgres = { /* ... */ };
     })
     
     # Staging instance
-    (mkSarInstance "staging" 8081 {
+    (mkMcpInjectorInstance "staging" 8089 {
       stripe-test = { /* ... */ };
       postgres-staging = { /* ... */ };
     })
@@ -283,13 +281,13 @@ in {
 The NixOS module sets these automatically, but for manual runs:
 
 ```bash
-export SAR_PORT=8080
-export SAR_HOST="127.0.0.1"
-export SAR_BIFROST_URL="http://localhost:8081"
-export SAR_LOG_LEVEL="info"
-export SAR_MAX_ITERATIONS=10
-export SAR_SKILLS_DIR="/path/to/skills"
-export SAR_MCP_CONFIG="/path/to/mcp-servers.edn"
+export MCP_INJECTOR_PORT=8088
+export MCP_INJECTOR_HOST="127.0.0.1"
+export MCP_INJECTOR_LLM_URL="http://localhost:8080"
+export MCP_INJECTOR_LOG_LEVEL="info"
+export MCP_INJECTOR_MAX_ITERATIONS=10
+export MCP_INJECTOR_TIMEOUT_MS=1800000
+export MCP_INJECTOR_MCP_CONFIG="./mcp-servers.edn"
 ```
 
 ## Testing
@@ -297,24 +295,24 @@ export SAR_MCP_CONFIG="/path/to/mcp-servers.edn"
 ```nix
 # Add to flake.nix checks
 checks = {
-  test-sar = pkgs.runCommand "test-sar" {
-    buildInputs = [ sar pkgs.curl pkgs.jq ];
+  test-mcp-injector = pkgs.runCommand "test-mcp-injector" {
+    buildInputs = [ mcp-injector pkgs.curl pkgs.jq ];
   } ''
-    # Start SAR in background
-    ${sar}/bin/sar &
-    SAR_PID=$!
+    # Start mcp-injector in background
+    ${mcp-injector}/bin/mcp-injector &
+    MCP_PID=$!
     
     # Wait for startup
     sleep 2
     
     # Test endpoint
-    curl -X POST http://localhost:8080/v1/chat/completions \
+    curl -X POST http://localhost:8088/v1/chat/completions \
       -H "Content-Type: application/json" \
       -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"test"}],"stream":true}' \
       | grep -q "data:" || exit 1
     
     # Cleanup
-    kill $SAR_PID
+    kill $MCP_PID
     
     touch $out
   '';
@@ -327,7 +325,7 @@ checks = {
 
 ```bash
 # On NixOS
-journalctl -u situated-agent-runtime -f
+journalctl -u mcp-injector -f
 
 # In dev
 bb run  # Logs to stdout
@@ -336,13 +334,13 @@ bb run  # Logs to stdout
 ### Restart service
 
 ```bash
-sudo systemctl restart situated-agent-runtime
+sudo systemctl restart mcp-injector
 ```
 
 ### Check status
 
 ```bash
-sudo systemctl status situated-agent-runtime
+sudo systemctl status mcp-injector
 ```
 
 ### Update configuration
@@ -354,25 +352,24 @@ sudo nixos-rebuild switch
 
 ## Tips
 
-1. **Skills directory**: Use a Git repo for skills and point `skillsDir` to it
 1. **MCP servers**: Run them as separate containers/services
-1. **Secrets**: Use `agenix` or `sops-nix` for API keys
-1. **Monitoring**: Add Prometheus exporters to MCP servers
-1. **Backup**: The runtime is stateless; backup your MCP data sources
+2. **Secrets**: Use `agenix` or `sops-nix` for API keys
+3. **Monitoring**: Add Prometheus exporters to MCP servers
+4. **Backup**: The runtime is stateless; backup your MCP data sources
 
 ## Troubleshooting
 
-### SAR won't start
+### mcp-injector won't start
 
 ```bash
 # Check logs
-journalctl -u situated-agent-runtime -n 50
+journalctl -u mcp-injector -n 50
 
 # Check if port is in use
-sudo ss -tlnp | grep 8080
+sudo ss -tlnp | grep 8088
 
-# Test Bifrost connection
-curl http://localhost:8081/health
+# Test LLM gateway connection
+curl http://localhost:8080/health
 ```
 
 ### MCP tools not working
@@ -381,7 +378,7 @@ curl http://localhost:8081/health
 # Verify MCP server is running
 curl http://localhost:3001/mcp -d '{"jsonrpc":"2.0","method":"tools/list","params":{},"id":"1"}'
 
-# Check SAR config
+# Check mcp-injector config
 cat /nix/store/*/mcp-servers.edn
 ```
 
@@ -390,5 +387,5 @@ cat /nix/store/*/mcp-servers.edn
 Adjust in `configuration.nix`:
 
 ```nix
-systemd.services.situated-agent-runtime.serviceConfig.MemoryMax = "4G";
+systemd.services.mcp-injector.serviceConfig.MemoryMax = "4G";
 ```

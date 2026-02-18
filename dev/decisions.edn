@@ -1,0 +1,73 @@
+[{:id :adr-001
+  :date "2026-02-12"
+  :title "Use real HTTP servers for integration testing"
+  :status :accepted
+  :context "Need reliable integration tests that verify actual HTTP behavior rather than mocked assumptions"
+  :decision "Spin up real http-kit servers in tests, not mocks"
+  :consequences ["Tests catch real HTTP issues and protocol mismatches"
+                 "Tests serve as living documentation"
+                 "Refactoring confidence - tests catch real breakage"
+                 "Slightly slower test runs than pure mocks"
+                 "More complex test setup"]
+  :alternatives-considered ["Mock HTTP calls with with-redefs"
+                            "Use external test containers (Docker)"
+                            "Use httpkit-stub library"]}
+
+ {:id :adr-002
+  :date "2026-02-12"
+  :title "Test-first design with integration focus"
+  :status :accepted
+  :context "Building mcp-injector from scratch, need clear behavior specification"
+  :decision "Write integration tests first, then minimal code to make them pass"
+  :consequences ["Clear behavior specification before implementation"
+                 "Tests serve as documentation"
+                 "May need to refactor as design evolves"
+                 "Requires discipline to write tests first"]
+  :alternatives-considered ["Implement then test (traditional)"
+                            "Full TDD with unit tests (too granular)"]}
+
+ {:id :adr-003
+  :date "2026-02-12"
+  :title "EDN-based project tracking"
+  :status :accepted
+  :context "Need session-survivable state tracking that works with AI agent workflows"
+  :decision "Use EDN files for task tracking (backlog.edn, current.edn) and Markdown for logs"
+  :consequences ["Git-native - everything versioned with code"
+                 "Clojure-native - readable, extensible"
+                 "Session-survivable - state in files, not memory"
+                 "No external dependencies or tools needed"
+                 "Manual updates required (no automation yet)"]
+  :alternatives-considered ["Beads (Steve Yegge's tool) - would add Go dependency"
+                            "JIRA/etc - external, not git-native"
+                            "GitHub Issues - not session-survivable for agent context"
+                            "Simple markdown todo lists - less structured"]}
+
+ {:id :adr-004
+  :date "2026-02-12"
+  :title "Babashka over Clojure JVM"
+  :status :accepted
+  :context "Need fast startup, single binary deployment, minimal dependencies"
+  :decision "Use Babashka for runtime instead of full Clojure JVM"
+  :consequences ["Fast startup (<100ms)"
+                 "Single ~100MB executable"
+                 "Built-in HTTP client and server (http-kit)"
+                 "Native JSON/EDN support"
+                 "Easy shell integration"
+                 "Limited to Babashka's supported libraries"]
+  :alternatives-considered ["Clojure JVM with deps.edn"
+                            "Go (faster, but not Clojure)"
+                            "Python (ecosystem, but not our style)"]}
+
+ {:id :adr-005
+  :date "2026-02-12"
+  :title "Nix for reproducible development environment"
+  :status :accepted
+  :context "Need consistent environment across developer machines and CI"
+  :decision "Use Nix flake for development shell and builds"
+  :consequences ["Reproducible development environment"
+                 "Declarative dependency management"
+                 "NixOS module for production deployment"
+                 "Learning curve for team members unfamiliar with Nix"]
+  :alternatives-considered ["Docker containers"
+                            "Traditional package managers (brew, apt)"
+                            "Manual installation instructions"]}]
