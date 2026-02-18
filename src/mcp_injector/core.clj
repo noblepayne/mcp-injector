@@ -126,26 +126,39 @@
         ;; Success
           (= 200 (:status response))
           (let [response-body (:body response)
-                parsed-body (json/parse-string response-body true)]
+                parsed-body (json/parse-string response-body true)
+                extra-fields (:extra_fields parsed-body)
+                provider (:provider extra-fields)
+                model-requested (:model_requested extra-fields)]
             (log-request "debug" "LLM returned 200"
                          {:url llm-url
+                          :provider provider
+                          :model_requested model-requested
                           :model (:model parsed-body)
                           :has_content (boolean (:content (get-in parsed-body [:choices 0 :message])))
-                          :finish_reason (get-in parsed-body [:choices 0 :finish_reason])
-                          :full_response parsed-body})
+                          :finish_reason (get-in parsed-body [:choices 0 :finish_reason])})
             {:success true
              :data parsed-body})
 
         ;; Rate limited
           (= 429 (:status response))
-          (do
+          (let [response-body (:body response)
+                parsed-body (json/parse-string response-body true)
+                extra-fields (:extra_fields parsed-body)
+                provider (:provider extra-fields)
+                model-requested (:model_requested extra-fields)]
             (log-request "warn" "Rate limited by LLM"
-                         {:status 429 :url llm-url})
+                         {:status 429
+                          :url llm-url
+                          :provider provider
+                          :model_requested model-requested})
             {:success false
              :status 429
              :error {:message "Rate limit exceeded"
                      :type "rate_limit_exceeded"
-                     :details (json/parse-string (:body response) true)}})
+                     :provider provider
+                     :model model-requested
+                     :details parsed-body}})
 
         ;; Server errors
           (>= (:status response) 500)
@@ -155,7 +168,15 @@
                               (catch Exception e
                                 {:raw_body response-body
                                  :parse_error (.getMessage e)}))
-                error-details (get parsed-body :error parsed-body)
+                ;; Extract Bifrost extra_fields for better error context
+                extra-fields (:extra_fields parsed-body)
+                provider (:provider extra-fields)
+                model-requested (:model_requested extra-fields)
+                raw-response (:raw_response extra-fields)
+                ;; Get error from upstream if available, else use Bifrost error
+                upstream-error (get-in raw-response [:error])
+                error-details (or upstream-error
+                                  (get parsed-body :error parsed-body))
                 error-msg (or (:message error-details)
                               (:raw_body parsed-body)
                               (str parsed-body))
@@ -165,7 +186,10 @@
             (log-request "error" "LLM server error"
                          {:status (:status response)
                           :url llm-url
+                          :provider provider
+                          :model_requested model-requested
                           :error parsed-body
+                          :upstream_error upstream-error
                           :translated (:message translated)
                           :is_context_overflow (= "context_overflow" (:type translated))})
             {:success false
@@ -173,6 +197,8 @@
              :error {:message (:message translated)
                      :type (:type translated)
                      :original_status (:status response)
+                     :provider provider
+                     :model model-requested
                      :details parsed-body}})
 
         ;; Other errors
