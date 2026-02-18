@@ -24,7 +24,7 @@
 
 (defn build-chat-response
   "Build OpenAI-compatible chat completion response"
-  [{:keys [content tool-calls model]}]
+  [{:keys [content tool-calls model usage]}]
   {:id (str "chatcmpl-" (java.util.UUID/randomUUID))
    :object "chat.completion"
    :created (quot (System/currentTimeMillis) 1000)
@@ -34,17 +34,18 @@
                         :content content
                         :tool_calls tool-calls}
               :finish_reason (if tool-calls "tool_calls" "stop")}]
-   :usage {:prompt_tokens 0
-           :completion_tokens 0
-           :total_tokens 0}})
+   :usage (or usage
+              {:prompt_tokens 0
+               :completion_tokens 0
+               :total_tokens 0})})
 
 (defn build-chat-response-streaming
   "Build SSE stream of chat completion response"
-  [{:keys [content tool-calls model]}]
+  [{:keys [content tool-calls model usage]}]
   (let [response-id (str "chatcmpl-" (java.util.UUID/randomUUID))
         created (quot (System/currentTimeMillis) 1000)]
     (str
-     ;; Initial response
+      ;; Initial response
      (sse-event (json/generate-string
                  {:id response-id
                   :object "chat.completion.chunk"
@@ -54,7 +55,7 @@
                              :delta {:role "assistant"}
                              :finish_reason nil}]}))
 
-     ;; Content chunks
+      ;; Content chunks
      (when content
        (sse-event (json/generate-string
                    {:id response-id
@@ -65,7 +66,7 @@
                                :delta {:content content}
                                :finish_reason nil}]})))
 
-     ;; Tool calls if present
+      ;; Tool calls if present
      (when tool-calls
        (sse-event (json/generate-string
                    {:id response-id
@@ -76,7 +77,7 @@
                                :delta {:tool_calls tool-calls}
                                :finish_reason nil}]})))
 
-     ;; Final chunk
+      ;; Final chunk
      (sse-event (json/generate-string
                  {:id response-id
                   :object "chat.completion.chunk"
@@ -84,9 +85,10 @@
                   :model model
                   :choices [{:index 0
                              :delta {}
-                             :finish_reason (if tool-calls "tool_calls" "stop")}]}))
+                             :finish_reason (if tool-calls "tool_calls" "stop")}]
+                  :usage usage}))
 
-     ;; Done
+      ;; Done
      (sse-done))))
 
 (defn send-sse-response

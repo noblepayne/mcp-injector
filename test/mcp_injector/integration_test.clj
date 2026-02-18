@@ -392,6 +392,105 @@
               (and (= 503 (:status response))
                    (str/includes? (get-in body [:error :message]) "Context overflow")))))))
 
+(deftest usage-propagated-to-client
+  (testing "Usage stats from upstream LLM should be passed through to downstream clients"
+    (test-llm/clear-responses *test-llm*)
+    (test-llm/set-response-with-usage
+     *test-llm*
+     {:role "assistant"
+      :content "Hello with usage!"}
+     {:prompt_tokens 42
+      :completion_tokens 17
+      :total_tokens 59})
+
+    (let [response @(http/post (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                               {:body (json/generate-string
+                                       {:model "gpt-4o-mini"
+                                        :messages [{:role "user"
+                                                    :content "Hello"}]
+                                        :stream false})
+                                :headers {"Content-Type" "application/json"}})
+          body (json/parse-string (:body response) true)]
+
+      (is (= 200 (:status response)))
+      (is (= "Hello with usage!" (get-in body [:choices 0 :message :content])))
+      ;; Verify usage is passed through
+      (is (= 42 (get-in body [:usage :prompt_tokens])))
+      (is (= 17 (get-in body [:usage :completion_tokens])))
+      (is (= 59 (get-in body [:usage :total_tokens]))))))
+
+(deftest usage-propagated-in-streaming-mode
+  (testing "Usage stats should be included in final SSE chunk"
+    (test-llm/clear-responses *test-llm*)
+    (test-llm/set-response-with-usage
+     *test-llm*
+     {:role "assistant"
+      :content "Streaming with usage!"}
+     {:prompt_tokens 100
+      :completion_tokens 25
+      :total_tokens 125})
+
+    (let [response @(http/post (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                               {:body (json/generate-string
+                                       {:model "gpt-4o-mini"
+                                        :messages [{:role "user"
+                                                    :content "Hello"}]
+                                        :stream true})
+                                :headers {"Content-Type" "application/json"}})
+          body (:body response)]
+
+      (is (= 200 (:status response)))
+      ;; Parse SSE events to find usage
+      (is (str/includes? body "Streaming with usage!"))
+      ;; Usage should be in the final chunk (before [DONE])
+      (is (str/includes? body "\"usage\":"))
+      (is (str/includes? body "\"prompt_tokens\":100"))
+      (is (str/includes? body "\"completion_tokens\":25"))
+      (is (str/includes? body "\"total_tokens\":125")))))
+
+(deftest stats-endpoint-returns-usage-stats
+  (testing "/stats endpoint should return aggregated usage statistics"
+    ;; Clear any existing stats first
+    (test-llm/clear-responses *test-llm*)
+
+    ;; Make a few requests with different models
+    (test-llm/set-response-with-usage
+     *test-llm*
+     {:role "assistant" :content "Request 1"}
+     {:prompt_tokens 10 :completion_tokens 5 :total_tokens 15})
+
+    @(http/post (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                {:body (json/generate-string
+                        {:model "test-model-a"
+                         :messages [{:role "user" :content "Hello"}]
+                         :stream false})
+                 :headers {"Content-Type" "application/json"}})
+
+    (test-llm/set-response-with-usage
+     *test-llm*
+     {:role "assistant" :content "Request 2"}
+     {:prompt_tokens 20 :completion_tokens 10 :total_tokens 30})
+
+    @(http/post (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                {:body (json/generate-string
+                        {:model "test-model-a"
+                         :messages [{:role "user" :content "Hello again"}]
+                         :stream false})
+                 :headers {"Content-Type" "application/json"}})
+
+    ;; Query stats endpoint
+    (let [response @(http/get (str "http://localhost:" (:port *injector*) "/stats"))
+          body (json/parse-string (:body response) true)]
+
+      (is (= 200 (:status response)))
+      (is (contains? body :stats))
+      (let [model-stats (get-in body [:stats :test-model-a])]
+        (is (some? model-stats))
+        (is (= 2 (:requests model-stats)))
+        (is (= 30 (:total-input-tokens model-stats)))
+        (is (= 15 (:total-output-tokens model-stats)))
+        (is (= 45 (:total-tokens model-stats)))))))
+
 (defn -main
   "Entry point for running tests via bb"
   [& _args]
