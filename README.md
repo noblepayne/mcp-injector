@@ -11,7 +11,7 @@ mcp-injector sits between an agent (like OpenClaw or any OpenAI-compatible clien
 │    Agent    │────▶│ mcp-injector │────▶│ LLM gateway │────▶│     LLM     │
 │ (OpenClaw)  │     │              │     │(litellm,    │     │             │
 └─────────────┘     └──────────────┘     │ bifrost)    │     └─────────────┘
-                            │              └─────────────┘
+                            │            └─────────────┘
                             │     ┌──────────┐     ┌──────────────┐
                             └──▶  │ MCP Tool │────▶│ MCP Server   │
                                   │ Execution│     │(stripe, etc.)│
