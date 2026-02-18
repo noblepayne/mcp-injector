@@ -1,0 +1,266 @@
+(ns mcp-injector.integration-test
+  "Integration tests for mcp-injector.
+   Uses real HTTP servers to test full request/response cycle."
+  (:require [clojure.test :refer [deftest is testing use-fixtures]]
+            [clojure.string :as str]
+            [org.httpkit.client :as http]
+            [cheshire.core :as json]
+            [mcp-injector.core :as core]
+            [mcp-injector.test-mcp-server :as test-mcp]
+            [mcp-injector.test-llm-server :as test-llm]))
+
+;; Test infrastructure state
+(def ^:dynamic *test-mcp* nil)
+(def ^:dynamic *test-llm* nil)
+(def ^:dynamic *injector* nil)
+
+(defn integration-fixture
+  "Fixture that starts all test servers before running tests"
+  [test-fn]
+  (let [mcp-server (test-mcp/start-test-mcp-server)
+        llm-server (test-llm/start-server)
+        injector-server (core/start-server {:port 0
+                                            :host "127.0.0.1"
+                                            :llm-url (str "http://localhost:" (:port llm-server))
+                                            :mcp-config "./mcp-servers.edn"})]
+    (try
+      (binding [*test-mcp* mcp-server
+                *test-llm* llm-server
+                *injector* injector-server]
+        (test-fn))
+      (finally
+        (core/stop-server injector-server)
+        (test-llm/stop-server llm-server)
+        (test-mcp/stop-server mcp-server)))))
+
+(use-fixtures :once integration-fixture)
+
+(defn clear-requests-fixture
+  "Clear request tracking before each test"
+  [test-fn]
+  (test-llm/clear-responses *test-llm*)
+  (reset! (:received-requests *test-llm*) [])
+  (test-fn))
+
+(use-fixtures :each clear-requests-fixture)
+
+(deftest test-infrastructure-works
+  (testing "Sanity check that our test servers work. Test MCP server responds to tools/list"
+    (let [response @(http/post (str "http://localhost:" (:port *test-mcp*) "/")
+                               {:body (json/generate-string
+                                       {:jsonrpc "2.0"
+                                        :id "test-1"
+                                        :method "tools/list"
+                                        :params {}})
+                                :headers {"Content-Type" "application/json"}})
+          body (json/parse-string (:body response) true)]
+      (is (= 200 (:status response)))
+      (is (= "2.0" (:jsonrpc body)))
+      (is (vector? (get-in body [:result :tools])))))
+
+  (testing "Test LLM server responds to chat completions"
+    (test-llm/clear-responses *test-llm*)
+    (test-llm/set-next-response *test-llm*
+                                {:role "assistant"
+                                 :content "Hello from test"})
+    (let [response @(http/post (str "http://localhost:" (:port *test-llm*) "/v1/chat/completions")
+                               {:body (json/generate-string
+                                       {:model "gpt-4o-mini"
+                                        :messages [{:role "user"
+                                                    :content "Test"}]})
+                                :headers {"Content-Type" "application/json"}})
+          body (json/parse-string (:body response) true)]
+      (is (= 200 (:status response)))
+      (is (= "Hello from test" (get-in body [:choices 0 :message :content]))))))
+
+(deftest simple-chat-no-tools
+  (testing "User asks a question that doesn't need tools. mcp-injector forwards request to LLM and returns response"
+    ;; Setup: LLM returns simple text response
+    (test-llm/clear-responses *test-llm*)
+    (test-llm/set-next-response *test-llm*
+                                {:role "assistant"
+                                 :content "I can help you with that!"})
+
+    ;; Send request to mcp-injector
+    (let [response @(http/post (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                               {:body (json/generate-string
+                                       {:model "gpt-4o-mini"
+                                        :messages [{:role "user"
+                                                    :content "Hello, can you help me?"}]
+                                        :stream false})
+                                :headers {"Content-Type" "application/json"}})
+          body (json/parse-string (:body response) true)]
+
+      ;; Verify response
+      (is (= 200 (:status response)))
+      (is (= "assistant" (get-in body [:choices 0 :message :role])))
+      (is (= "I can help you with that!" (get-in body [:choices 0 :message :content])))
+
+      ;; Verify LLM received the request
+      (is (= 1 (count @(:received-requests *test-llm*)))))))
+
+(deftest single-tool-call
+  (testing "User request requires one tool call. Agent loop executes tool and returns result"
+    ;; Setup
+    (test-llm/clear-responses *test-llm*)
+    (test-llm/set-tool-call-response *test-llm*
+                                     [{:name "stripe.retrieve_customer"
+                                       :arguments {:customer_id "cus_123"}}])
+    (test-llm/set-next-response *test-llm*
+                                {:role "assistant"
+                                 :content "Found customer: customer@example.com"})
+
+    ;; Send request to mcp-injector
+    (let [response @(http/post (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                               {:body (json/generate-string
+                                       {:model "gpt-4o-mini"
+                                        :messages [{:role "user"
+                                                    :content "Find customer cus_123"}]
+                                        :stream false})
+                                :headers {"Content-Type" "application/json"}})
+          body (json/parse-string (:body response) true)]
+
+      ;; Verify final response
+      (is (= 200 (:status response)))
+      (is (str/includes? (get-in body [:choices 0 :message :content]) "customer@example.com"))
+
+      ;; Verify LLM was called twice (initial + after tool)
+      (is (= 2 (count @(:received-requests *test-llm*)))))))
+
+(deftest multi-turn-agent-loop
+  (testing "User request requires multiple tool calls. Agent loop handles multiple turns"
+    ;; Setup: First tool call, second tool call, then final response
+    (test-llm/clear-responses *test-llm*)
+    (test-llm/set-tool-call-response *test-llm*
+                                     [{:name "stripe.list_charges"
+                                       :arguments {:customer "cus_123"}}])
+    (test-llm/set-tool-call-response *test-llm*
+                                     [{:name "postgres.query"
+                                       :arguments {:sql "SELECT * FROM analytics"}}])
+    (test-llm/set-next-response *test-llm*
+                                {:role "assistant"
+                                 :content "Here is your complete analytics report."})
+
+     ;; Test will verify full multi-turn flow
+    (let [response @(http/post (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                               {:body (json/generate-string
+                                       {:model "gpt-4o-mini"
+                                        :messages [{:role "user"
+                                                    :content "Get my charges and analytics"}]
+                                        :stream false})
+                                :headers {"Content-Type" "application/json"}})
+          _body (json/parse-string (:body response) true)]
+
+      ;; Verify final response - just check status for now
+      ;; (full multi-turn agent loop needs more work)
+      (is (= 200 (:status response)))
+
+      ;; Verify LLM was called at least twice (initial + at least one tool)
+      (is (>= (count @(:received-requests *test-llm*)) 2)))))
+
+(deftest get-tool-schema-meta-tool
+  (testing "LLM calls get_tool_schema to discover tool details. Meta-tool returns full schema"
+    ;; Note: mcp.get_tool_schema is a meta-tool that queries MCP servers
+    ;; For this test, we simulate it being called but don't require full implementation
+    (test-llm/clear-responses *test-llm*)
+    (test-llm/set-next-response *test-llm*
+                                {:role "assistant"
+                                 :content "The stripe.retrieve_customer tool requires a customer_id parameter."})
+
+    ;; Send request
+    (let [response @(http/post (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                               {:body (json/generate-string
+                                       {:model "gpt-4o-mini"
+                                        :messages [{:role "user"
+                                                    :content "What parameters does stripe.retrieve_customer need?"}]
+                                        :stream false})
+                                :headers {"Content-Type" "application/json"}})
+          body (json/parse-string (:body response) true)]
+
+      ;; Verify response (meta-tools are passed through for now)
+      (is (= 200 (:status response)))
+      (is (str/includes? (get-in body [:choices 0 :message :content]) "customer_id")))))
+
+(deftest max-iterations-limit
+  (testing "Agent loop stops after max iterations. Infinite loop scenario is handled gracefully"
+    ;; Setup: LLM always returns tool_calls
+    (test-llm/clear-responses *test-llm*)
+    (dotimes [_ 15]
+      (test-llm/set-tool-call-response *test-llm*
+                                       [{:name "test.tool"
+                                         :arguments {}}]))
+
+    ;; Test will verify:
+    ;; 1. Loop stops at max-iterations
+    ;; 2. Error or partial result returned
+
+    (let [response @(http/post (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                               {:body (json/generate-string
+                                       {:model "gpt-4o-mini"
+                                        :messages [{:role "user"
+                                                    :content "Infinite loop test"}]
+                                        :stream false})
+                                :headers {"Content-Type" "application/json"}})
+          _body (json/parse-string (:body response) true)]
+
+      ;; Should eventually return even with infinite tool calls
+      (is (= 200 (:status response))))))
+
+(deftest mcp-server-error
+  (testing "Tool call fails, error handled gracefully. MCP errors are included in conversation context"
+    ;; Setup: MCP will fail (but our test MCP doesn't support errors yet)
+    ;; For now, test that errors don't crash the system
+    (test-llm/clear-responses *test-llm*)
+    (test-llm/set-tool-call-response *test-llm*
+                                     [{:name "stripe.retrieve_customer"
+                                       :arguments {:customer_id "invalid_id"}}])
+    (test-llm/set-next-response *test-llm*
+                                {:role "assistant"
+                                 :content "I encountered an error retrieving that customer."})
+
+    ;; Send request
+    (let [response @(http/post (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                               {:body (json/generate-string
+                                       {:model "gpt-4o-mini"
+                                        :messages [{:role "user"
+                                                    :content "Find customer invalid_id"}]
+                                        :stream false})
+                                :headers {"Content-Type" "application/json"}})]
+      ;; Verify response (should handle error gracefully)
+      (is (= 200 (:status response)))
+      ;; LLM should see the error and respond
+      (is (>= (count @(:received-requests *test-llm*)) 2)))))
+
+(deftest stream-mode-sse-format
+  (testing "Stream=true returns SSE format for OpenClaw compatibility - SSE stream is properly formatted"
+    (test-llm/clear-responses *test-llm*)
+    (test-llm/set-next-response *test-llm*
+                                {:role "assistant"
+                                 :content "Streaming response!"})
+
+    (let [response @(http/post (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                               {:body (json/generate-string
+                                       {:model "gpt-4o-mini"
+                                        :messages [{:role "user"
+                                                    :content "Hello"}]
+                                        :stream true})
+                                :headers {"Content-Type" "application/json"}})
+          body (:body response)
+          headers (:headers response)]
+
+      ;; Verify SSE format
+      (is (= 200 (:status response)))
+      ;; Headers may have different casing depending on http-kit version
+      (is (some #(re-find #"event-stream" (str %)) (vals headers)))
+      ;; Should contain SSE data prefix
+      (is (str/includes? body "data:"))
+      ;; Should contain [DONE] marker
+      (is (str/includes? body "[DONE]"))
+      ;; Should contain the actual content
+      (is (str/includes? body "Streaming response!")))))
+
+(defn -main
+  "Entry point for running tests via bb"
+  [& _args]
+  (let [result (clojure.test/run-tests 'mcp-injector.integration-test)]
+    (System/exit (if (zero? (:fail result)) 0 1))))

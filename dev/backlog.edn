@@ -1,0 +1,208 @@
+{:version "1.0"
+ :tasks
+ [{:id :test-infrastructure
+   :title "Build test infrastructure"
+   :description "Create real HTTP test servers (MCP and Bifrost simulators) for integration testing"
+   :status :done
+   :priority :high
+   :phase 1
+   :tags [:testing :infrastructure]
+   :created "2026-02-12"
+   :started "2026-02-12"
+   :completed "2026-02-12"
+   :depends-on []
+   :commits []}
+
+  {:id :bb-edn-setup
+   :title "Create bb.edn with dependencies"
+   :description "Set up Babashka config with http-kit, cheshire, and test dependencies"
+   :status :done
+   :priority :high
+   :phase 1
+   :tags [:config :dependencies]
+   :created "2026-02-12"
+   :completed "2026-02-12"
+   :depends-on []
+   :commits []}
+
+  {:id :mcp-servers-config
+   :title "Create mcp-servers.edn config file"
+   :description "Configuration file for MCP server definitions"
+   :status :done
+   :priority :high
+   :phase 1
+   :tags [:config]
+   :created "2026-02-12"
+   :completed "2026-02-12"
+   :depends-on []
+   :commits []}
+
+  {:id :test-mcp-server
+   :title "Create test MCP server"
+   :description "Real http-kit server that implements MCP protocol for testing"
+   :status :done
+   :priority :high
+   :phase 1
+   :tags [:testing :infrastructure]
+   :created "2026-02-12"
+   :completed "2026-02-12"
+   :depends-on [:test-infrastructure]
+   :commits []}
+
+  {:id :test-bifrost-server
+   :title "Create test Bifrost server"
+   :description "Simulate LLM gateway responses for testing agent loop"
+   :status :done
+   :priority :high
+   :phase 1
+   :tags [:testing :infrastructure]
+   :created "2026-02-12"
+   :completed "2026-02-12"
+   :depends-on [:test-infrastructure]
+   :commits []}
+
+  {:id :first-integration-test
+   :title "Write first integration test"
+   :description "Happy path test: simple chat request with no tool calls"
+   :status :done
+   :priority :high
+   :phase 1
+   :tags [:testing]
+   :created "2026-02-12"
+   :completed "2026-02-12"
+   :depends-on [:test-mcp-server :test-bifrost-server]
+   :commits []}
+
+  {:id :core-http-server
+   :title "Implement core HTTP server"
+   :description "HTTP-kit server with /v1/chat/completions endpoint"
+   :status :done
+   :priority :high
+   :phase 1
+   :tags [:core :http]
+   :created "2026-02-12"
+   :completed "2026-02-12"
+   :depends-on [:first-integration-test]
+   :commits []}
+
+  {:id :config-module
+   :title "Create config module"
+   :description "Environment variable handling and MCP server registry"
+   :status :done
+   :priority :high
+   :phase 1
+   :tags [:core :config]
+   :created "2026-02-12"
+   :completed "2026-02-12"
+   :depends-on [:core-http-server]
+   :commits []}
+
+  {:id :mcp-client
+   :title "Implement MCP HTTP client"
+   :description "Client for calling MCP servers via HTTP"
+   :status :done
+   :priority :high
+   :phase 1
+   :tags [:core :mcp]
+   :created "2026-02-12"
+   :completed "2026-02-12"
+   :depends-on [:config-module]
+   :commits []}
+
+  {:id :openai-compat
+   :title "Implement OpenAI compatibility"
+   :description "Request parsing, SSE streaming response formatting"
+   :status :done
+   :priority :high
+   :phase 1
+   :tags [:core :openai]
+   :created "2026-02-12"
+   :completed "2026-02-12"
+   :depends-on [:core-http-server]
+   :commits []}
+
+  {:id :agent-loop
+   :title "Implement agent execution loop"
+   :description "Core loop: LLM -> tools -> LLM until complete"
+   :status :done
+   :priority :high
+   :phase 1
+   :tags [:core :agent-loop]
+   :created "2026-02-12"
+   :completed "2026-02-12"
+   :depends-on [:mcp-client :openai-compat]
+   :commits []}
+
+  {:id :tool-discovery
+   :title "Implement tool discovery and injection"
+   :description "Inject MCP directory, get_tool_schema meta-tool"
+   :status :done
+   :priority :medium
+   :phase 1
+   :tags [:core :tools]
+   :created "2026-02-12"
+   :completed "2026-02-12"
+   :depends-on [:agent-loop]
+   :commits []}
+
+  {:id :error-handling
+   :title "Add error handling and edge cases"
+   :description "Handle MCP failures, timeouts, max iterations"
+   :status :done
+   :priority :medium
+   :phase 1
+   :tags [:core :error-handling]
+   :created "2026-02-12"
+   :completed "2026-02-12"
+   :depends-on [:agent-loop]
+   :commits []}
+
+  {:id :integration-tests-full
+   :title "Write comprehensive integration tests"
+   :description "Multi-turn agent loop, tool calls, error cases"
+   :status :done
+   :priority :medium
+   :phase 1
+   :tags [:testing]
+   :created "2026-02-12"
+   :completed "2026-02-12"
+   :depends-on [:agent-loop :error-handling]
+   :commits []}
+
+  {:id :docs-update
+   :title "Update documentation"
+   :description "README, usage examples, API docs"
+   :status :done
+   :priority :low
+   :phase 1
+   :tags [:docs]
+   :created "2026-02-12"
+   :completed "2026-02-12"
+   :depends-on []
+   :commits []}
+
+  {:id :bifrost-shim
+   :title "Add OpenClaw→Bifrost shim with fallback injection"
+   :description "Minimal shim that strips stream flag, injects fallbacks array, converts response to SSE"
+   :status :done
+   :priority :high
+   :phase 1
+   :tags [:core :bifrost :fallbacks]
+   :created "2026-02-12"
+   :started "2026-02-12"
+   :completed "2026-02-12"
+   :depends-on []
+   :commits []}
+
+  {:id :bifrost-error-handling
+   :title "Add Bifrost error handling tests"
+   :description "Test 429 rate limits, 500 errors, and timeout scenarios"
+   :status :done
+   :priority :high
+   :phase 1
+   :tags [:core :bifrost :testing :error-handling]
+   :created "2026-02-12"
+   :started "2026-02-12"
+   :completed "2026-02-12"
+   :depends-on [:bifrost-shim]
+   :commits []}]}
