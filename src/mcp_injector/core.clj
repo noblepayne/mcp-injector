@@ -294,7 +294,9 @@
   [virtual-config chat-req llm-url]
   (let [chain (:chain virtual-config)
         cooldown-mins (get virtual-config :cooldown-minutes 5)
-        retry-on (get virtual-config :retry-on [429 500 503])
+         ;; Don't retry on 503 (context overflow) - same model = same context limit
+         ;; Let OpenClaw handle compression instead of wasting quota on same-sized models
+        retry-on (get virtual-config :retry-on [429 500])
         available-providers (get-available-providers chain)]
 
     (log-request "debug" "Trying virtual model chain"

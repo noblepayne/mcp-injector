@@ -691,4 +691,33 @@ Parse with keyword keys for internal use:
 ```
 Keep JSON strings only at HTTP boundaries.
 
+## Virtual Model Retry Strategy
 
+When configuring `:retry-on` for virtual model chains, think about what each error means:
+
+**Retry (advance to next provider):**
+- **429** (rate limit) - Provider busy, try same model elsewhere
+- **500** (server error) - Provider broken, try different provider
+
+**Don't retry (let upstream handle it):**
+- **503** (context overflow) - Same model = same context limit. Advancing wastes quota. Let OpenClaw compress the session instead.
+
+**Example config:**
+```clojure
+:virtual-models
+{:brain
+ {:chain ["zen/kimi-k2.5-free" "nvidia/moonshotai/kimi-k2.5" ...]
+  :cooldown-minutes 5
+  :retry-on [429 500]}}  ; Don't retry on 503
+```
+
+**Why this matters:**
+If zen/kimi-k2.5-free hits context limit (503), nvidia/moonshotai/kimi-k2.5 has the **same context window**. It will fail too. Better to return 503 to OpenClaw, which triggers compaction and retry with the same (now working) provider.
+
+**The exception:** If you have a tiered chain with progressively larger context windows:
+```clojure
+:chain ["small-model-8k" "medium-model-32k" "large-model-128k"]
+:retry-on [429 500 503]  ; OK here: advancing actually helps
+```
+
+But most chains are same-model-different-provider for redundancy, not tiered.
