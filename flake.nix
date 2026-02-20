@@ -50,6 +50,7 @@
           };
         };
       in {
+        formatter = pkgs.alejandra;
         packages = {
           default = mcp-injector;
         };
@@ -102,11 +103,12 @@
 
           mcp-injector-pkg = self.packages.${pkgs.system}.default;
 
-          mcpServersConfig = pkgs.runCommand "mcp-servers.edn" {
-            nativeBuildInputs = [pkgs.jet];
-          } ''
-            echo '${builtins.toJSON cfg.mcpServers}' | jet -i json -o edn -k > $out
-          '';
+          mcpServersConfig =
+            pkgs.runCommand "mcp-servers.edn" {
+              nativeBuildInputs = [pkgs.jet];
+            } ''
+              echo '${builtins.toJSON cfg.mcpServers}' | jet -i json -o edn -k > $out
+            '';
         in {
           options.services.mcp-injector = {
             enable = mkEnableOption "mcp-injector HTTP server";

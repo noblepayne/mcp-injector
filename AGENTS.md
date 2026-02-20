@@ -17,6 +17,7 @@ We practice **test-driven development with real integration tests**:
 - **Don't mock what you don't own** - Test against real protocol implementations
 
 **Why real servers?**
+
 - Tests verify actual HTTP behavior, not mocked assumptions
 - Refactoring confidence - tests catch real breakage
 - Living documentation - tests show how the system works end-to-end
@@ -24,6 +25,7 @@ We practice **test-driven development with real integration tests**:
 - Debugging aid - test servers log exactly what was sent/received
 
 **Test Infrastructure Pattern:**
+
 ```
 Test MCP Server (real http-kit server)
     ↓
@@ -35,30 +37,36 @@ Test LLM gateway Server (real http-kit server)
 All three run in-process, tests make real HTTP requests through the full stack.
 
 ### Simple Over Easy (Hickey)
+
 - **Complection is the enemy** - Don't twist things together
 - Separate concerns: data, behavior, state, identity, time
 - Choose simple constructs even when they're unfamiliar
 - Easy now often means painful later
 
 ### Actions, Calculations, Data (Normand)
+
 Keep these distinct:
+
 - **Actions** - Functions with side effects (HTTP calls, I/O)
 - **Calculations** - Pure functions, deterministic, testable
 - **Data** - Maps, vectors, primitives - just data
 
 ### Functional Core, Imperative Shell
+
 - Core business logic: pure functions (calculations)
 - Shell: handles side effects, orchestration, I/O
 - Push impurity to the edges
 - Test the core thoroughly, shell sparingly
 
 ### YAGNI (You Aren't Gonna Need It)
+
 - Don't build for imagined futures
 - Solve today's problem, make change easy
 - Abstractions are a cost, not a benefit
 - "What if we need..." is usually wrong
 
 ### Testing Philosophy
+
 > "Write tests. Not too many. Mostly integration."
 
 - **Integration tests** verify the system actually works
@@ -68,6 +76,7 @@ Keep these distinct:
 - Avoid testing trivial code
 
 ### Data-Driven, Not Class-Driven
+
 - Maps over objects
 - Functions over methods
 - Transformations over mutations
@@ -75,12 +84,14 @@ Keep these distinct:
 - "Just use a map" is often the right answer
 
 ### Systems Thinking (Wayne)
+
 - Think in states and transitions
 - Explicit state machines beat distributed state soup
 - Verify designs before coding
 - Failures are part of the design
 
 ### Production-Ready, Not Overbuilt
+
 - Robustness > cleverness
 - Reliability over features
 - Observable, debuggable, operable
@@ -106,12 +117,14 @@ Keep these distinct:
 ## Build/Test/Lint Commands
 
 ### Development Shell
+
 ```bash
 # Enter Nix development shell (required for all commands)
 nix develop
 ```
 
 ### Running
+
 ```bash
 # Start the runtime server
 bb run
@@ -148,6 +161,7 @@ bb test && clj-kondo --lint src/ test/ && cljfmt check src/ test/
 ```
 
 ### Testing
+
 ```bash
 # Run all tests
 bb test
@@ -160,6 +174,7 @@ bb test --focus mcp-injector.integration-test/test-name
 ```
 
 ### Linting & Formatting
+
 ```bash
 # Lint Clojure code
 clj-kondo --lint src/ test/
@@ -179,6 +194,7 @@ mdformat NIX_USAGE.md situated-agent-runtime-spec.md
 ### Clojure Conventions
 
 **Naming:**
+
 - Functions: `kebab-case` (e.g., `handle-chat-completion`, `call-mcp-tool`)
 - Constants: `UPPER_SNAKE_CASE` for env vars, `*earmuffs*` for dynamic vars
 - Namespaces: `mcp-injector.module-name` (e.g., `mcp-injector.core`, `mcp-injector.mcp-client`)
@@ -186,6 +202,7 @@ mdformat NIX_USAGE.md situated-agent-runtime-spec.md
 - Private functions: suffix with `-` (e.g., `helper-fn-`)
 
 **Imports:**
+
 ```clojure
 (ns mcp-injector.module
   (:require [clojure.string :as str]
@@ -193,17 +210,20 @@ mdformat NIX_USAGE.md situated-agent-runtime-spec.md
             [babashka.curl :as curl]
             [cheshire.core :as json]))
 ```
+
 - Group: standard lib → third-party → internal
 - Always use `:as` aliases
 - Prefer `:require` over `:use`
 
 **Formatting:**
+
 - 2-space indentation
 - 80-100 character line limit
 - Align map values and let bindings
 - Trailing newline at EOF
 
 **Error Handling:**
+
 ```clojure
 ;; Use try/catch with specific exceptions
 (try
@@ -225,7 +245,7 @@ mdformat NIX_USAGE.md situated-agent-runtime-spec.md
 
 ### Babashka Coding Standards
 
-**Single file is fine.** If a program fits in one file (<1000 lines), don't split it into namespaces. Babashka doesn't need a build step — the file IS the program.
+**Single file is fine.** If a program fits in one file (\<1000 lines), don't split it into namespaces. Babashka doesn't need a build step — the file IS the program.
 
 **Comments explain WHY not WHAT.** The code shows what. Comments explain tradeoffs, non-obvious choices, and the reasoning behind a decision.
 
@@ -353,10 +373,10 @@ Instead of mocking HTTP calls, we spin up real in-process servers:
 **Key Testing Principles:**
 
 1. **Port 0 allocation** - Let OS assign random free ports to avoid conflicts
-2. **Request tracking** - Test servers store received requests for assertions
-3. **Configurable responses** - LLM gateway simulator can return predetermined responses
-4. **Fast startup** - http-kit servers start in <100ms, no Docker overhead
-5. **In-process** - Everything runs in same JVM for easy debugging
+1. **Request tracking** - Test servers store received requests for assertions
+1. **Configurable responses** - LLM gateway simulator can return predetermined responses
+1. **Fast startup** - http-kit servers start in \<100ms, no Docker overhead
+1. **In-process** - Everything runs in same JVM for easy debugging
 
 **Example Test:**
 
@@ -399,6 +419,7 @@ Instead of mocking HTTP calls, we spin up real in-process servers:
 ### Integration Testing Philosophy
 
 **Focus on behavior, not implementation:**
+
 ```clojure
 ;; Good: Tests what the system does
 (deftest end-to-end-workflow
@@ -414,12 +435,14 @@ Instead of mocking HTTP calls, we spin up real in-process servers:
 ```
 
 **Prefer testing at boundaries:**
+
 - Test HTTP endpoints with real requests
 - Test database interactions with actual queries
 - Use testcontainers for external services
 - Pure functions in core - test those with simple inputs/outputs
 
 **Test only what's valuable:**
+
 - Skip tests for trivial getters/setters
 - Skip tests for configuration
 - Test complex business logic
@@ -427,12 +450,14 @@ Instead of mocking HTTP calls, we spin up real in-process servers:
 - Test the "happy path" once, focus on error cases
 
 **Don't mock what you don't own:**
+
 - Use real HTTP clients with test servers
 - Use in-memory databases
 - Use real file systems (temp directories)
 - Mocks create fragile tests that break on refactoring
 
 **Example of good vs bad testing:**
+
 ```clojure
 ;; BAD: Over-mocked, tests implementation
 (deftest bad-test
@@ -450,11 +475,13 @@ Instead of mocking HTTP calls, we spin up real in-process servers:
 ```
 
 **Test file naming:**
+
 - `*_test.clj` for unit/integration tests
 - `*_integration_test.clj` for slow integration tests
 - Group tests by behavior, not by function
 
 **Running tests:**
+
 ```bash
 # Run all tests
 bb test
@@ -470,12 +497,14 @@ bb test -n mcp-injector.integration-test/test-name
 ```
 
 **Test data:**
+
 - Use factories or builders, not fixtures
 - Prefer literal data over complex setup
 - Make test data obvious and minimal
 - One test, one concept
 
 **Example:**
+
 ```clojure
 ;; Good: Clear what we're testing
 (deftest process-payment-test
@@ -489,12 +518,14 @@ bb test -n mcp-injector.integration-test/test-name
 ```
 
 **When to write tests:**
+
 - When fixing a bug (write test first)
 - When adding complex business logic
 - When the cost of failure is high
 - When you're unsure if code works
 
 **When NOT to write tests:**
+
 - Configuration code
 - Simple data transformations
 - Code that's already covered by integration tests
@@ -508,6 +539,7 @@ Remember: Tests are a cost. Write them when they provide value.
 ### Babashka-Specific Tips
 
 **Port Handling with http-kit:**
+
 ```clojure
 ;; Always extract actual port from server metadata
 (let [srv (http/run-server handler {:port 0})
@@ -516,6 +548,7 @@ Remember: Tests are a cost. Write them when they provide value.
 ```
 
 **HTTP Client Patterns:**
+
 ```clojure
 ;; Use @ to deref deferred responses
 (let [response @(http/post url {:body body})]
@@ -525,6 +558,7 @@ Remember: Tests are a cost. Write them when they provide value.
 ```
 
 **JSON Handling:**
+
 ```clojure
 ;; Parse with keyword keys
 (json/parse-string body true)
@@ -536,9 +570,11 @@ Remember: Tests are a cost. Write them when they provide value.
 ### When Code Goes Wrong
 
 **Parenthesis Issues:**
+
 - Don't spin for hours fixing unbalanced parens
 - After 2-3 attempts, just rewrite the function/file
 - Use heredocs for clean file creation:
+
 ```bash
 cat > file.clj << 'EOF'
 (ns ...)
@@ -546,6 +582,7 @@ EOF
 ```
 
 **Namespace Loading Errors:**
+
 - Check `bb -cp "src:test" -m namespace` to isolate issues
 - Verify requires match actual usage
 - Remove unused requires (clj-kondo will warn)
@@ -553,6 +590,7 @@ EOF
 ### Development Workflow That Works
 
 **Small, Tested Commits:**
+
 ```bash
 # Make a change
 # Run tests
@@ -567,41 +605,45 @@ git add -A && git commit -m "feat: ..."
 ```
 
 **When to Use Tools:**
+
 - **Edit tool**: Good for simple string replacements
 - **clojure-edit tool**: Better for complex function replacements, respects Clojure syntax
 - **Bash cat heredoc**: Best when parens are completely tangled
 
 ### Anti-Patterns We Avoided
 
-✅ **Did:** Simple HTTP handler functions  
+✅ **Did:** Simple HTTP handler functions\
 ❌ **Avoided:** Complex middleware chains
 
-✅ **Did:** Real HTTP servers in tests  
+✅ **Did:** Real HTTP servers in tests\
 ❌ **Avoided:** Mocking HTTP calls
 
-✅ **Did:** Data-driven configuration (EDN)  
+✅ **Did:** Data-driven configuration (EDN)\
 ❌ **Avoided:** Complex config objects
 
-✅ **Did:** Small, focused namespaces  
+✅ **Did:** Small, focused namespaces\
 ❌ **Avoided:** God namespaces
 
-✅ **Did:** Pure functions with clear inputs/outputs  
+✅ **Did:** Pure functions with clear inputs/outputs\
 ❌ **Avoided:** Hidden state and side effects
 
 ### Debugging Strategies
 
 **1. Print Debugging (Still Valid):**
+
 ```clojure
 (println "Debug:" variable)
 ;; Check test output to see values
 ```
 
 **2. Isolate the Problem:**
+
 - Comment out half the code
 - Does it work? Problem is in commented half
 - Binary search until you find the issue
 
 **3. REPL-Driven Development:**
+
 ```bash
 # Start REPL
 bb repl
@@ -616,12 +658,14 @@ bb repl
 ### Project Tracking That Actually Works
 
 **EDN + Markdown approach:**
+
 - `dev/backlog.edn` - Master task list
-- `dev/current.edn` - Current session state  
+- `dev/current.edn` - Current session state
 - `dev/log.md` - Running narrative
 - `dev/decisions.edn` - Why we chose X over Y
 
 **Why this works:**
+
 - Git-native (versioned with code)
 - Session-survivable (files persist)
 - No external tools needed
@@ -631,6 +675,7 @@ bb repl
 ### Commit Message Guidelines
 
 **Format:**
+
 ```
 <type>: <subject>
 
@@ -638,6 +683,7 @@ bb repl
 ```
 
 **Types:**
+
 - `feat:` - New feature
 - `fix:` - Bug fix
 - `style:` - Formatting, linting
@@ -646,6 +692,7 @@ bb repl
 - `test:` - Adding tests
 
 **Examples:**
+
 ```
 feat: add tool execution loop with iteration limits
 
@@ -662,22 +709,29 @@ Use :local-port from meta instead of assuming port 0
 ## Common Gotchas
 
 ### SQLite WAL Mode
+
 Always run `PRAGMA journal_mode=WAL` before any writes. Without it, SQLite defaults to rollback journal which is slower and blocks more. Put it in your `init-db!` function.
 
 ### http-kit Thread Pool
+
 Default is 4 workers. For more concurrent SSE clients, bump `{:thread 32}` or higher in your server options.
 
 ### Babashka core.async
-`go` blocks use real threads (no async parking). Fine for <100 concurrent connections. If you need more, switch to non-blocking approaches or move to full Clojure + Manifold.
+
+`go` blocks use real threads (no async parking). Fine for \<100 concurrent connections. If you need more, switch to non-blocking approaches or move to full Clojure + Manifold.
 
 ### ULID Monotonicity
+
 The standard ULID impl uses timestamp + random. It's not strictly monotonic under clock skew. Acceptable for most use cases, but don't rely on it for strict ordering if clocks can go backwards.
 
 ### History Replay with ULID
+
 `WHERE id > ?` works because ULIDs are lexicographically sortable by time. Don't change the ID scheme without fixing this query pattern — it's the foundation of pagination and replay.
 
 ### Port 0 Allocation
+
 Always extract the actual port from server metadata after starting:
+
 ```clojure
 (let [srv (http/run-server handler {:port 0})
       port (:local-port (meta srv))]
@@ -685,10 +739,13 @@ Always extract the actual port from server metadata after starting:
 ```
 
 ### JSON Parsing
+
 Parse with keyword keys for internal use:
+
 ```clojure
 (json/parse-string body true)  ; => {:key "value"}
 ```
+
 Keep JSON strings only at HTTP boundaries.
 
 ## Virtual Model Retry Strategy
@@ -696,13 +753,16 @@ Keep JSON strings only at HTTP boundaries.
 When configuring `:retry-on` for virtual model chains, think about what each error means:
 
 **Retry (advance to next provider):**
+
 - **429** (rate limit) - Provider busy, try same model elsewhere
 - **500** (server error) - Provider broken, try different provider
 
 **Don't retry (let upstream handle it):**
+
 - **503** (context overflow) - Same model = same context limit. Advancing wastes quota. Let OpenClaw compress the session instead.
 
 **Example config:**
+
 ```clojure
 :virtual-models
 {:brain
@@ -715,6 +775,7 @@ When configuring `:retry-on` for virtual model chains, think about what each err
 If zen/kimi-k2.5-free hits context limit (503), nvidia/moonshotai/kimi-k2.5 has the **same context window**. It will fail too. Better to return 503 to OpenClaw, which triggers compaction and retry with the same (now working) provider.
 
 **The exception:** If you have a tiered chain with progressively larger context windows:
+
 ```clojure
 :chain ["small-model-8k" "medium-model-32k" "large-model-128k"]
 :retry-on [429 500 503]  ; OK here: advancing actually helps

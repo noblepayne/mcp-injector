@@ -5,6 +5,7 @@ High-level progress tracking for the mcp-injector project.
 ## Project Overview
 
 **mcp-injector** is an HTTP shim that sits between OpenClaw (conversational AI agent) and LLM gateways (like LLM gateway). It:
+
 - Intercepts OpenAI-compatible requests from OpenClaw
 - Strips streaming flag and forwards to LLM
 - Injects MCP tool directory into prompts
@@ -13,11 +14,12 @@ High-level progress tracking for the mcp-injector project.
 
 ## Current Status
 
-**Phase**: 1 - Core Runtime ✅ COMPLETE  
-**Status**: All tests passing, production-ready core  
+**Phase**: 1 - Core Runtime ✅ COMPLETE\
+**Status**: All tests passing, production-ready core\
 **Last Updated**: 2026-02-12
 
 ### Completed
+
 - [x] Project planning and architecture design
 - [x] AGENTS.md with philosophy and guidelines
 - [x] Test-first design plan
@@ -30,6 +32,7 @@ High-level progress tracking for the mcp-injector project.
 - [x] Code cleanup and linting
 
 ### Next Phase
+
 - [ ] Progressive tool discovery (Phase 2)
 - [ ] Schema caching
 - [ ] Production hardening (retries, timeouts, observability)
@@ -66,6 +69,7 @@ See `dev/decisions.edn` for full Architecture Decision Records.
 ## Development Approach
 
 We follow **grumpy pragmatic** Clojure development:
+
 - Simple over easy (Rich Hickey)
 - Actions, Calculations, Data (Eric Normand)
 - Functional core, imperative shell
@@ -78,23 +82,27 @@ We follow **grumpy pragmatic** Clojure development:
 ### What Worked Well
 
 **1. Test-First with Real Servers**
+
 - Integration tests with in-process HTTP servers catch real issues
 - No mock drift - tests verify actual behavior
 - Tests serve as living documentation
 - Pattern: Test MCP Server → mcp-injector → Test LLM gateway Server
 
 **2. Small, Focused Functions**
+
 - Pure functions for business logic (calculations)
 - Impure functions only at edges (HTTP, I/O)
 - Easy to test, easy to reason about
 - Example: `build-tool-directory`, `inject-tools-into-messages`
 
 **3. Data-Driven Configuration**
+
 - EDN files for configuration (mcp-servers.edn)
 - Environment variables for deployment-specific values
 - Maps over objects, data over methods
 
 **4. Project Tracking in EDN**
+
 - Git-native, session-survivable
 - Readable, extensible, no external tools
 - backlog.edn + current.edn + log.md pattern
@@ -102,6 +110,7 @@ We follow **grumpy pragmatic** Clojure development:
 ### Technical Lessons
 
 **1. Babashka Port Handling**
+
 ```clojure
 ;; Use :local-port from server meta to get actual port
 (let [srv (http/run-server handler {:port 0})
@@ -110,16 +119,19 @@ We follow **grumpy pragmatic** Clojure development:
 ```
 
 **2. HTTP Client with http-kit**
+
 - Use `@` to deref deferred responses
 - Always check `:status` in response
 - Handle errors gracefully with try/catch
 
 **3. JSON Handling with Cheshire**
+
 - `(json/parse-string body true)` for keyword keys
 - `(json/generate-string data)` for output
 - Consistent error shapes: `{:error "message"}`
 
 **4. Namespace Organization**
+
 - core.clj - Main entry point, HTTP handlers
 - config.clj - Configuration loading
 - openai_compat.clj - API compatibility
@@ -127,6 +139,7 @@ We follow **grumpy pragmatic** Clojure development:
 - agent_loop.clj - Business logic
 
 **5. Linting and Formatting**
+
 - Run `clj-kondo --lint src/ test/` regularly
 - Use `cljfmt fix src/ test/` before commits
 - Prefix unused params with `_` (e.g., `_messages`)
@@ -135,6 +148,7 @@ We follow **grumpy pragmatic** Clojure development:
 ### Development Workflow
 
 **Before Committing:**
+
 ```bash
 bb test                              # Run tests
 clj-kondo --lint src/ test/          # Check for issues
@@ -144,24 +158,28 @@ git add -A && git commit -m "..."    # Commit
 ```
 
 **When Stuck:**
+
 1. Check syntax with `bb -cp "src:test" -m namespace`
-2. Use `clojure-dev_clojure_edit` for complex edits
-3. Rewrite file if parens are too tangled
-4. Commit working state before major changes
+1. Use `clojure-dev_clojure_edit` for complex edits
+1. Rewrite file if parens are too tangled
+1. Commit working state before major changes
 
 ### What to Avoid
 
 **1. Over-Engineering**
+
 - Started simple, added complexity only when needed
 - No premature abstractions
 - YAGNI - You Aren't Gonna Need It
 
 **2. Mocking External Services**
+
 - Real test servers > mocks
 - Tests catch protocol changes
 - More confidence in refactors
 
 **3. Big Bang Changes**
+
 - Small, tested commits
 - Easy to bisect if issues arise
 - Always have a working state to revert to
@@ -183,6 +201,6 @@ git add -A && git commit -m "..."    # Commit
 - **Log**: `dev/log.md`
 - **Decisions**: `dev/decisions.edn`
 
----
+______________________________________________________________________
 
 *Last updated: 2026-02-12 - Phase 1 Core Runtime Complete*

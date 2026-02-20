@@ -1,2 +1,2 @@
- - sometimes nvidia/kimi doens't respond.
+- sometimes nvidia/kimi doens't respond.
 - ook for no rsponse, jst thinking, try again. even if it otherwise looks good.

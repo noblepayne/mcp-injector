@@ -3,6 +3,7 @@
 ## Context
 
 We have a working mcp-injector (Phase 1 complete) but need to solve an immediate problem:
+
 - OpenClaw hardcodes `stream=true` in all requests
 - Bifrost requires `fallbacks` array in request body for automatic failover
 - When a provider returns 429, we want automatic fallback to next provider
@@ -11,11 +12,12 @@ We have a working mcp-injector (Phase 1 complete) but need to solve an immediate
 ## What We're Building
 
 A **minimal shim** that:
+
 1. Accepts OpenAI-compatible requests from OpenClaw (with `stream=true`)
-2. Strips `stream=true` → `stream=false` (Bifrost requirement)
-3. Injects `fallbacks` array with provider chain
-4. Forwards modified request to Bifrost
-5. Converts Bifrost response back to SSE for OpenClaw
+1. Strips `stream=true` → `stream=false` (Bifrost requirement)
+1. Injects `fallbacks` array with provider chain
+1. Forwards modified request to Bifrost
+1. Converts Bifrost response back to SSE for OpenClaw
 
 **Time budget:** 30-60 minutes (including tests)
 
@@ -46,6 +48,7 @@ Bifrost expects a `fallbacks` array in the request body:
 ```
 
 **How it works:**
+
 - Bifrost tries the main request first (based on Virtual Key weights)
 - On 429 or error, tries first fallback
 - If that fails, tries second fallback
@@ -274,8 +277,8 @@ openclaw start
 Once tests pass and manual testing confirms it works:
 
 1. Commit: `git commit -m "feat: add OpenClaw→Bifrost shim with fallback injection"`
-2. Update `dev/current.edn` to mark task complete
-3. **Move on to self-modifying agent work**
+1. Update `dev/current.edn` to mark task complete
+1. **Move on to self-modifying agent work**
 
 The injector is done enough. Phase 2 (progressive discovery) only needed if token costs become an issue.
 

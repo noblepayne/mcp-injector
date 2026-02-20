@@ -1,6 +1,7 @@
 # DEV_LOG.md - Tool Auto-Discovery Feature
 
 ## Goal
+
 Auto-discover tools from MCP servers at runtime instead of relying solely on config lists.
 
 ## Changes
@@ -8,6 +9,7 @@ Auto-discover tools from MCP servers at runtime instead of relying solely on con
 ### -19
 
 #### Plan
+
 - **2026-02Lazy + cached** approach: fetch tools on first request per server
 - Filter by config:
   - `:tools nil` → discover all
@@ -16,16 +18,18 @@ Auto-discover tools from MCP servers at runtime instead of relying solely on con
 - No cache invalidation (cache forever until restart)
 
 #### Files to modify
+
 1. `src/mcp_injector/mcp_client.clj` - add tool cache, discover-tools fns
-2. `src/mcp_injector/config.clj` - update inject-tools-into-messages, build-tool-directory
-3. `src/mcp_injector/core.clj` - wire up discovery
+1. `src/mcp_injector/config.clj` - update inject-tools-into-messages, build-tool-directory
+1. `src/mcp_injector/core.clj` - wire up discovery
 
 #### Tests to add
+
 - Config nil → shows all discovered tools
 - Config [] → shows none
 - Config [specific] → shows only those
 
----
+______________________________________________________________________
 
 ## Progress
 
@@ -36,11 +40,12 @@ Auto-discover tools from MCP servers at runtime instead of relying solely on con
 - [ ] Run tests
 - [ ] Lint and format
 
----
+______________________________________________________________________
 
 ## Implementation Complete (2026-02-20)
 
 ### Summary
+
 - Added `mcp/discover-tools` function with caching
 - Added filtering by config `:tools` list:
   - `nil` → discover all
@@ -51,23 +56,26 @@ Auto-discover tools from MCP servers at runtime instead of relying solely on con
 - Added tests for filtering behavior
 
 ### Tests Added
+
 - `tool-discovery-filtering-nil-shows-all`
-- `tool-discovery-filtering-empty-shows-none` 
+- `tool-discovery-filtering-empty-shows-none`
 - `tool-discovery-filtering-specific-shows-only-those`
 - `tool-discovery-caches-results`
 
----
+______________________________________________________________________
 
 ## Additional Bug Report (2026-02-20)
 
 **Issue:** MCP proxy with stdio server doing streamablehttp - complex output causes parsing errors.
 
-**Error:** 
+**Error:**
+
 ```
 Unexpected character ('_' (code 95)): was expecting comma to separate Object entries
 ```
 
 **Root cause:** LLM is returning malformed JSON in tool arguments - looks like duplicate keys or bad JSON merging:
+
 ```
 "arguments":"{\"operation\": \"insert\"_after\", ...
 ```
@@ -76,19 +84,21 @@ The `"_after"` suggests the LLM is outputting malformed JSON where `insert_after
 
 **Status:** Not yet investigated.
 
----
+______________________________________________________________________
 
 ## STDIO Transport Support (2026-02-20)
 
 ### Research Summary
 
 **Babashka/process** - available in bb.edn:
+
 - `process` - creates subprocess with configurable stdin/stdout
 - `alive?` - check if process running
 - `destroy` / `destroy-tree` - kill process
 - Supports env vars, working dir, etc.
 
 **core.async in Babashka:**
+
 - `go` blocks use thread pool (8 threads default), NOT true async
 - `thread` - spawns real threads
 - For many concurrent stdio connections, need to use `thread` or increase pool
@@ -96,6 +106,7 @@ The `"_after"` suggests the LLM is outputting malformed JSON where `insert_after
 ### Design
 
 #### Config Interface
+
 ```clojure
 ;; mcp-servers.edn
 {:servers
@@ -122,6 +133,7 @@ mcp_client.clj (dispatch)
 ```
 
 Both implement common protocol:
+
 - `initialize! [server-config]` → session
 - `list-tools [session]` → [tools]
 - `call-tool [session tool-name args]` → result
@@ -148,6 +160,7 @@ Both implement common protocol:
 #### Dependencies
 
 Add to bb.edn:
+
 ```clojure
 babashka/process {:git/url "https://github.com/babashka/process"
                  :sha "..."}

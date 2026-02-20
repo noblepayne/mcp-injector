@@ -4,7 +4,7 @@
 
 This guide walks you through manually testing the mcp-injector shim between your existing OpenClaw and LLM gateway setups.
 
----
+______________________________________________________________________
 
 ## Prerequisites
 
@@ -12,7 +12,7 @@ This guide walks you through manually testing the mcp-injector shim between your
 - Working LLM gateway instance (with access to zen/nvidia/openrouter)
 - mcp-injector built and ready to run
 
----
+______________________________________________________________________
 
 ## Step 1: Configure mcp-servers.edn
 
@@ -36,7 +36,7 @@ Create or update `mcp-servers.edn` in the mcp-injector directory:
 
 **Note:** For initial testing, leave `:servers` empty. This tests the pure shim mode (stream stripping + fallbacks only).
 
----
+______________________________________________________________________
 
 ## Step 2: Start mcp-injector
 
@@ -47,6 +47,7 @@ bb run
 ```
 
 Or with explicit config:
+
 ```bash
 MCP_INJECTOR_PORT=8080 \
 MCP_INJECTOR_BIFROST_URL=http://localhost:8081 \
@@ -55,36 +56,40 @@ bb run
 ```
 
 **Verify it's running:**
+
 ```bash
 curl http://localhost:8080/health
 # Should return: {"status":"ok"}
 ```
 
----
+______________________________________________________________________
 
 ## Step 3: Configure OpenClaw
 
 Update your OpenClaw configuration to point to mcp-injector instead of LLM gateway directly:
 
 **Before:**
+
 ```
 LLM_URL=http://localhost:8081/v1/chat/completions
 ```
 
 **After:**
+
 ```
 LLM_URL=http://localhost:8080/v1/chat/completions
 ```
 
 **Restart OpenClaw** to pick up the new URL.
 
----
+______________________________________________________________________
 
 ## Step 4: Test Basic Functionality
 
 ### 4.1 Simple Chat (No Tools)
 
 Ask OpenClaw a simple question:
+
 ```
 You: Hello, how are you?
 ```
@@ -92,6 +97,7 @@ You: Hello, how are you?
 **Expected:** Normal response from LLM via shim
 
 **Check mcp-injector logs:**
+
 - Should see request received
 - Should see successful response
 
@@ -100,6 +106,7 @@ You: Hello, how are you?
 Check LLM gateway logs or metrics to confirm fallbacks array is being received.
 
 The request to LLM gateway should include:
+
 ```json
 {
   "model": "...",
@@ -118,6 +125,7 @@ The request to LLM gateway should include:
 OpenClaw sends `stream=true`, but LLM gateway receives `stream=false`.
 
 The response from mcp-injector to OpenClaw should be SSE format:
+
 ```
 data: {"id":"...","object":"chat.completion.chunk",...}
 
@@ -126,7 +134,7 @@ data: {"id":"...","object":"chat.completion.chunk",...}
 data: [DONE]
 ```
 
----
+______________________________________________________________________
 
 ## Step 5: Test Error Handling
 
@@ -139,20 +147,22 @@ If you have a way to trigger rate limits in LLM gateway (or temporarily configur
 ### 5.2 LLM gateway Down Scenario
 
 Temporarily stop LLM gateway:
+
 ```bash
 # Stop your LLM gateway instance
 ```
 
 Ask OpenClaw a question.
 
-**Expected:** 
+**Expected:**
+
 - mcp-injector returns 503 or 504
 - Error message: "Failed to reach LLM gateway" or "LLM gateway timeout"
 - OpenClaw handles gracefully (shows error to user, doesn't crash)
 
 Restart LLM gateway and verify recovery.
 
----
+______________________________________________________________________
 
 ## Step 6: Test with MCP Tools (Optional)
 
@@ -161,6 +171,7 @@ If you have MCP servers running:
 ### 6.1 Configure MCP Server
 
 Update `mcp-servers.edn`:
+
 ```clojure
 {:servers
   {:stripe
@@ -176,53 +187,60 @@ Restart mcp-injector.
 ### 6.2 Test Tool Execution
 
 Ask OpenClaw something that would use the tool:
+
 ```
 You: Look up customer cus_123 in Stripe
 ```
 
 **Expected flow:**
+
 1. OpenClaw → mcp-injector (with tool directory injected)
-2. mcp-injector → LLM gateway
-3. LLM gateway → LLM
-4. LLM returns tool_call for `stripe.retrieve_customer`
-5. mcp-injector executes tool against MCP server
-6. mcp-injector sends result back to LLM gateway
-7. LLM gateway → LLM with tool result
-8. LLM returns final response
-9. mcp-injector → OpenClaw (SSE format)
+1. mcp-injector → LLM gateway
+1. LLM gateway → LLM
+1. LLM returns tool_call for `stripe.retrieve_customer`
+1. mcp-injector executes tool against MCP server
+1. mcp-injector sends result back to LLM gateway
+1. LLM gateway → LLM with tool result
+1. LLM returns final response
+1. mcp-injector → OpenClaw (SSE format)
 
 **Check:**
+
 - MCP server received the tool call
 - Final response includes tool result
 
----
+______________________________________________________________________
 
 ## Step 7: Test Non-MCP Tool Pass-Through
 
 If OpenClaw has its own tools (not MCP):
 
 Ask something that triggers an OpenClaw tool:
+
 ```
 You: Set a reminder for tomorrow
 ```
 
 **Expected:**
+
 - mcp-injector receives tool_call for `openclaw.reminder` (or similar)
 - Since it's not in MCP config, passes through to OpenClaw in SSE
 - OpenClaw handles its own tool
 
----
+______________________________________________________________________
 
 ## Troubleshooting
 
 ### Issue: OpenClaw can't connect to mcp-injector
 
 **Check:**
+
 ```bash
 curl http://localhost:8080/health
 ```
 
 **If fails:**
+
 - Verify mcp-injector is running
 - Check port (default 8080)
 - Check firewall/network
@@ -230,11 +248,13 @@ curl http://localhost:8080/health
 ### Issue: mcp-injector can't connect to LLM gateway
 
 **Check logs:**
+
 ```
 Error handling request: LLM gateway error: 503
 ```
 
 **Solutions:**
+
 - Verify LLM gateway URL in config
 - Check LLM gateway is running: `curl http://localhost:8081/health`
 - Check network connectivity
@@ -242,6 +262,7 @@ Error handling request: LLM gateway error: 503
 ### Issue: Fallbacks not being sent
 
 **Check:**
+
 - Verify `mcp-servers.edn` has `:llm {:fallbacks [...]}`
 - Check mcp-injector loaded config (look for logs on startup)
 - Verify EDN syntax is valid
@@ -251,6 +272,7 @@ Error handling request: LLM gateway error: 503
 **Symptoms:** OpenClaw receives garbled response or hangs
 
 **Check:**
+
 - Verify LLM gateway is returning JSON (not SSE)
 - Check mcp-injector logs for parsing errors
 - Test directly: `curl -N http://localhost:8080/v1/chat/completions -d '{"model":"test","messages":[{"role":"user","content":"hi"}],"stream":true}'`
@@ -258,12 +280,13 @@ Error handling request: LLM gateway error: 503
 ### Issue: Tool calls not executing
 
 **Check:**
+
 - MCP server URL is correct in config
 - MCP server is running and accessible
 - Tool name format is `server.tool` (e.g., `stripe.retrieve_customer`)
 - Check mcp-injector logs for "MCP server not found" errors
 
----
+______________________________________________________________________
 
 ## Performance Notes
 
@@ -272,33 +295,34 @@ Error handling request: LLM gateway error: 503
 - **Connection pooling:** Not implemented (may be added later)
 
 If you see timeouts under load, may need to:
-1. Increase timeout
-2. Add connection pooling
-3. Implement retries
 
----
+1. Increase timeout
+1. Add connection pooling
+1. Implement retries
+
+______________________________________________________________________
 
 ## Rollback Plan
 
 If things go wrong:
 
 1. Stop mcp-injector: `Ctrl+C`
-2. Revert OpenClaw config to point directly at LLM gateway
-3. Restart OpenClaw
+1. Revert OpenClaw config to point directly at LLM gateway
+1. Restart OpenClaw
 
----
+______________________________________________________________________
 
 ## Success Criteria
 
-✅ OpenClaw works normally (users can chat)  
-✅ LLM gateway receives fallbacks array  
-✅ LLM gateway receives stream=false  
-✅ OpenClaw receives SSE responses  
-✅ Rate limits handled gracefully  
-✅ LLM gateway outages handled gracefully  
-✅ (Optional) MCP tools execute correctly  
-✅ (Optional) Non-MCP tools pass through to OpenClaw  
+✅ OpenClaw works normally (users can chat)\
+✅ LLM gateway receives fallbacks array\
+✅ LLM gateway receives stream=false\
+✅ OpenClaw receives SSE responses\
+✅ Rate limits handled gracefully\
+✅ LLM gateway outages handled gracefully\
+✅ (Optional) MCP tools execute correctly\
+✅ (Optional) Non-MCP tools pass through to OpenClaw
 
----
+______________________________________________________________________
 
 **Questions? Issues?** Check the logs first - they're your best friend for debugging.

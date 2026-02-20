@@ -353,9 +353,9 @@ sudo nixos-rebuild switch
 ## Tips
 
 1. **MCP servers**: Run them as separate containers/services
-2. **Secrets**: Use `agenix` or `sops-nix` for API keys
-3. **Monitoring**: Add Prometheus exporters to MCP servers
-4. **Backup**: The runtime is stateless; backup your MCP data sources
+1. **Secrets**: Use `agenix` or `sops-nix` for API keys
+1. **Monitoring**: Add Prometheus exporters to MCP servers
+1. **Backup**: The runtime is stateless; backup your MCP data sources
 
 ## Troubleshooting
 

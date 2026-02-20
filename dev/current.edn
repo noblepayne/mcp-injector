@@ -11,5 +11,5 @@
 - All 15 tests passing (7 integration + 8 bifrost shim)
 - Zero lint warnings"
  :next-steps ["Test with real Bifrost instance"
-               "Verify timeout handling in production"
-               "Monitor for edge cases"]}
+              "Verify timeout handling in production"
+              "Monitor for edge cases"]}
