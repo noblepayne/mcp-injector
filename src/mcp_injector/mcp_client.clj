@@ -1,7 +1,12 @@
 (ns mcp-injector.mcp-client
-  "HTTP client for calling MCP servers."
+  "HTTP client for calling MCP servers.
+   Implements Streamable HTTP transport with session management."
   (:require [org.httpkit.client :as http]
-            [cheshire.core :as json]))
+            [cheshire.core :as json]
+            [clojure.string :as str]))
+
+(def ^:private sessions (atom {})) ;; url -> session-id
+(def ^:const PROTOCOL_VERSION "2025-03-26")
 
 (defn- build-request-body
   "Build JSON-RPC request body"
@@ -11,44 +16,132 @@
    :params params
    :id id})
 
+(defn- get-headers [session-id]
+  (cond-> {"Content-Type" "application/json"
+           "Accept" "application/json"
+           "MCP-Protocol-Version" PROTOCOL_VERSION}
+    session-id (assoc "Mcp-Session-Id" session-id)))
+
+(defn clear-sessions! []
+  (reset! sessions {}))
+
+(defn- body->string [body]
+  (if (string? body) body (slurp body)))
+
+(defn- log-debug [msg data]
+  (println (json/generate-string {:timestamp (str (java.time.Instant/now))
+                                  :level "debug"
+                                  :message msg
+                                  :data data})))
+
+(defn- initialize-session! [server-url]
+  (let [init-body (build-request-body "initialize"
+                                      {:protocolVersion PROTOCOL_VERSION
+                                       :capabilities {}
+                                       :clientInfo {:name "mcp-injector" :version "1.0.0"}}
+                                      "init")
+        _ (log-debug "Initializing MCP session" {:url server-url})
+        init-resp @(http/post server-url
+                              {:body (json/generate-string init-body)
+                               :headers (get-headers nil)})
+        status (:status init-resp)
+        body-str (some-> init-resp :body body->string)]
+    (if (= 200 status)
+      (let [headers (:headers init-resp)
+            ;; Case-insensitive search for mcp-session-id
+            session-id (some (fn [[k v]]
+                               (when (= "mcp-session-id" (str/lower-case (name k)))
+                                 v))
+                             headers)
+            _ (log-debug "MCP session initialized" {:url server-url :session-id session-id})
+            initialized-body (build-request-body "notifications/initialized" {} nil)]
+        ;; Send initialized notification
+        @(http/post server-url
+                    {:body (json/generate-string initialized-body)
+                     :headers (get-headers session-id)})
+        (when session-id
+          (swap! sessions assoc server-url session-id))
+        session-id)
+      (throw (ex-info "Failed to initialize MCP session"
+                      {:status status
+                       :body body-str})))))
+
+(defn- get-or-create-session! [server-url]
+  (or (get @sessions server-url)
+      (initialize-session! server-url)))
+
 (defn list-tools
   "List available tools from an MCP server"
   [server-url]
-  (let [body (build-request-body "tools/list" {} "list-req")
+  (let [session-id (get-or-create-session! server-url)
+        body (build-request-body "tools/list" {} "list-req")
         response @(http/post server-url
                              {:body (json/generate-string body)
-                              :headers {"Content-Type" "application/json"}})]
-    (if (= 200 (:status response))
-      (let [parsed (json/parse-string (:body response) true)]
+                              :headers (get-headers session-id)})
+        status (:status response)
+        body-str (some-> response :body body->string)]
+    (cond
+      (= 200 status)
+      (let [parsed (json/parse-string body-str true)]
         (get-in parsed [:result :tools] []))
+
+      ;; Handle session expiration
+      (#{400 404} status)
+      (do
+        (swap! sessions dissoc server-url)
+        (let [_new-session-id (get-or-create-session! server-url)]
+          (list-tools server-url)))
+
+      :else
       (throw (ex-info "Failed to list tools"
-                      {:status (:status response)
-                       :body (:body response)})))))
+                      {:status status
+                       :body body-str})))))
 
 (defn call-tool
   "Call a tool on an MCP server"
   [server-url tool-name arguments]
-  (let [body (build-request-body "tools/call"
+  (let [session-id (get-or-create-session! server-url)
+        body (build-request-body "tools/call"
                                  {:name tool-name
                                   :arguments arguments}
                                  (str "call-" (java.util.UUID/randomUUID)))
         response @(http/post server-url
                              {:body (json/generate-string body)
-                              :headers {"Content-Type" "application/json"}})]
-    (if (= 200 (:status response))
-      (let [parsed (json/parse-string (:body response) true)]
+                              :headers (get-headers session-id)})
+        status (:status response)
+        body-str (some-> response :body body->string)]
+    (cond
+      (= 200 status)
+      (let [parsed (json/parse-string body-str true)]
         (if (:error parsed)
           {:error (:error parsed)}
           (get-in parsed [:result :content])))
-      {:error {:message (str "HTTP error: " (:status response))
-               :status (:status response)}})))
+
+      ;; Handle session expiration
+      (#{400 404} status)
+      (do
+        (swap! sessions dissoc server-url)
+        (call-tool server-url tool-name arguments))
+
+      :else
+      {:error {:message (str "HTTP error: " status)
+               :status status
+               :body body-str}})))
+
+(def ^:private schema-cache (atom {}))
+
+(defn clear-schema-cache! []
+  (reset! schema-cache {}))
 
 (defn get-tool-schema
-  "Get schema for a specific tool from an MCP server"
+  "Get schema for a specific tool from an MCP server with caching"
   [server-url tool-name]
-  ;; Phase 1: Get full tool list and filter
-  ;; Phase 2: Cache schemas per request
-  (let [tools (list-tools server-url)
-        tool (first (filter #(= tool-name (:name %)) tools))]
-    (or tool
-        {:error (str "Tool not found: " tool-name)})))
+  (let [cache-key [server-url tool-name]]
+    (if-let [cached (get @schema-cache cache-key)]
+      cached
+      (let [tools (list-tools server-url)
+            tool (first (filter #(= tool-name (:name %)) tools))]
+        (when tool
+          (swap! schema-cache assoc cache-key tool))
+        (or tool
+            {:error (str "Tool not found: " tool-name)})))))
