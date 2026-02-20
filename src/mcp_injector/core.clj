@@ -65,10 +65,13 @@
 
 (defn- call-llm [base-url payload]
   (let [url (str (str/replace base-url #"/$" "") "/v1/chat/completions")
-        resp (http-client/post url
-                               {:headers {"Content-Type" "application/json"}
-                                :body (json/generate-string payload)
-                                :throw false})]
+        resp (try
+               (http-client/post url
+                                 {:headers {"Content-Type" "application/json"}
+                                  :body (json/generate-string payload)
+                                  :throw false})
+               (catch Exception e
+                 {:status 502 :body (json/generate-string {:error {:message (.getMessage e)}})}))]
     (if (= 200 (:status resp))
       {:success true :data (json/parse-string (:body resp) true)}
       (let [status (:status resp)
