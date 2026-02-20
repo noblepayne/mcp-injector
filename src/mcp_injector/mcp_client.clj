@@ -28,7 +28,7 @@
                                         "Accept" "application/json"
                                         "MCP-Protocol-Version" PROTOCOL_VERSION}})
         status (:status init-resp)]
-        (if (= 200 status)
+    (if (= 200 status)
       (let [headers (:headers init-resp)
             _ (log-debug "Received initialize headers" {:headers headers})
             session-id (or (get headers "mcp-session-id")
@@ -79,7 +79,7 @@
       {:error (.getMessage e)})))
 
 (defn list-tools [server-id server-config]
-  (let [url (or (:url server-config) 
+  (let [url (or (:url server-config)
                 (when (and (string? server-id) (str/starts-with? server-id "http")) server-id))]
     (cond
       (:cmd server-config) (stdio/list-tools server-id server-config)

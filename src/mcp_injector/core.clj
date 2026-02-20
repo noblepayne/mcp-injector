@@ -80,14 +80,14 @@
 (defn- track-usage! [model usage]
   (when (and model usage)
     (swap! usage-stats update model (fn [existing]
-                                     (let [input (or (:prompt_tokens usage) 0)
-                                           output (or (:completion_tokens usage) 0)
-                                           total (or (:total_tokens usage) (+ input output))]
-                                       {:requests (inc (or (:requests existing) 0))
-                                        :total-input-tokens (+ input (or (:total-input-tokens existing) 0))
-                                        :total-output-tokens (+ output (or (:total-output-tokens existing) 0))
-                                        :total-tokens (+ total (or (:total-tokens existing) 0))
-                                        :last-updated (System/currentTimeMillis)})))))
+                                      (let [input (or (:prompt_tokens usage) 0)
+                                            output (or (:completion_tokens usage) 0)
+                                            total (or (:total_tokens usage) (+ input output))]
+                                        {:requests (inc (or (:requests existing) 0))
+                                         :total-input-tokens (+ input (or (:total-input-tokens existing) 0))
+                                         :total-output-tokens (+ output (or (:total-output-tokens existing) 0))
+                                         :total-tokens (+ total (or (:total-tokens existing) 0))
+                                         :last-updated (System/currentTimeMillis)})))))
 
 (defn- execute-tool [full-name args mcp-servers discovered-this-loop]
   (cond
@@ -148,7 +148,7 @@
                                                                    :description (:description tool)
                                                                    :parameters (:inputSchema tool)}})
                                                      @discovered-this-loop)))
-                        next-req (assoc current-req 
+                        next-req (assoc current-req
                                         :messages (vec (concat (:messages current-req) [message] results))
                                         :tools (vec new-tools))]
                     (log-request "info" "Tool Loop" {:iteration iteration :calls (count mcp-calls)})
@@ -271,4 +271,4 @@
 (defn clear-mcp-sessions! []
   (mcp/clear-tool-cache!))
 
-(defn -main [& args] (start-server (config/load-config)))
+(defn -main [& _args] (start-server (config/load-config)))

@@ -107,7 +107,7 @@
           (or (:error resp) {:error "Tool execution failed"}))))))
 
 (defn stop-all []
-  (doseq [[id session] @sessions]
+  (doseq [[_id session] @sessions]
     (reset! (:running session) false)
     (process/destroy (:process session)))
   (reset! sessions {}))

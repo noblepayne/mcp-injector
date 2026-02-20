@@ -9,7 +9,6 @@
             [org.httpkit.client :as http]
             [cheshire.core :as json]
             [mcp-injector.core :as core]
-            [mcp-injector.config :as config]
             [mcp-injector.mcp-client :as mcp]
             [mcp-injector.test-mcp-server :as test-mcp]
             [mcp-injector.test-llm-server :as test-llm]))
