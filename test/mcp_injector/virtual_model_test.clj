@@ -7,6 +7,9 @@
             [cheshire.core :as json]
             [org.httpkit.client :as http]))
 
+(defn- body->string [body]
+  (if (string? body) body (slurp body)))
+
 (def test-state (atom {}))
 
 (use-fixtures :once
@@ -50,7 +53,7 @@
                                         :messages [{:role "user" :content "Hello"}]
                                         :stream false})
                                 :headers {"Content-Type" "application/json"}})
-          body (json/parse-string (:body response) true)]
+          body (json/parse-string (body->string (:body response)) true)]
       (is (= 200 (:status response)))
       (is (= "Direct response" (get-in body [:choices 0 :message :content]))))))
 
@@ -67,7 +70,7 @@
                                         :messages [{:role "user" :content "Hello"}]
                                         :stream false})
                                 :headers {"Content-Type" "application/json"}})
-          body (json/parse-string (:body response) true)]
+          body (json/parse-string (body->string (:body response)) true)]
       (is (= 200 (:status response)))
       (is (= "Success!" (get-in body [:choices 0 :message :content]))))))
 
@@ -85,7 +88,7 @@
                                         :messages [{:role "user" :content "Hello"}]
                                         :stream false})
                                 :headers {"Content-Type" "application/json"}})
-          body (json/parse-string (:body response) true)]
+          body (json/parse-string (body->string (:body response)) true)]
       (is (= 200 (:status response)))
       (is (= "Fallback!" (get-in body [:choices 0 :message :content]))))))
 
@@ -100,7 +103,7 @@
                                         :messages [{:role "user" :content "Hello"}]
                                         :stream false})
                                 :headers {"Content-Type" "application/json"}})
-          body (json/generate-string (:body response) true)]
+          body (body->string (:body response))]
       (is (= 502 (:status response)))
       (is (re-find #"error" body)))))
 
@@ -118,7 +121,7 @@
                                         :messages [{:role "user" :content "First"}]
                                         :stream false})
                                 :headers {"Content-Type" "application/json"}})
-          body (json/parse-string (:body response) true)]
+          body (json/parse-string (body->string (:body response)) true)]
       (is (= 200 (:status response)))
       (is (= "Fallback response" (get-in body [:choices 0 :message :content])))
 
@@ -132,7 +135,7 @@
                                           :messages [{:role "user" :content "Second"}]
                                           :stream false})
                                   :headers {"Content-Type" "application/json"}})
-            _ (json/parse-string (:body response) true)
+            _ (json/parse-string (body->string (:body response)) true)
             requests @(:received-requests llm)]
         (is (= 200 (:status response)))
         (is (= 1 (count requests)))

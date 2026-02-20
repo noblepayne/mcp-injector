@@ -8,6 +8,9 @@
             [cheshire.core :as json]
             [org.httpkit.client :as http]))
 
+(defn- body->string [body]
+  (if (string? body) body (slurp body)))
+
 (def test-state (atom {}))
 
 (use-fixtures :once
@@ -191,7 +194,7 @@
       (is (= "application/json" (get-in response [:headers :content-type])))
 
       ;; Body should contain error
-      (let [body (json/parse-string (:body response) true)]
+      (let [body (json/parse-string (body->string (:body response)) true)]
         (is (= "upstream_error" (get-in body [:error :type])))))))
 
 (deftest test-llm-timeout

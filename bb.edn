@@ -7,7 +7,15 @@
         :requires ([clojure.test :as t])
         :task (do
                 (require 'mcp-injector.integration-test)
-                (let [{:keys [fail error]} (t/run-tests 'mcp-injector.integration-test)]
+                (require 'mcp-injector.discovery-test)
+                (require 'mcp-injector.mcp-session-test)
+                (require 'mcp-injector.virtual-model-test)
+                (require 'mcp-injector.llm-shim-test)
+                (let [{:keys [fail error]} (t/run-tests 'mcp-injector.integration-test
+                                                        'mcp-injector.discovery-test
+                                                        'mcp-injector.mcp-session-test
+                                                        'mcp-injector.virtual-model-test
+                                                        'mcp-injector.llm-shim-test)]
                   (when (pos? (+ fail error))
                     (System/exit 1))))}
 

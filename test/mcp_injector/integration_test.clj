@@ -1,6 +1,6 @@
 (ns mcp-injector.integration-test
-  "Integration tests for mcp-injector.
-   Uses real HTTP servers to test full request/response cycle."
+  "Full stack integration tests for mcp-injector.
+   Tests the flow: Client → mcp-injector → LLM gateway → LLM"
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.string :as str]
             [org.httpkit.client :as http]
@@ -8,6 +8,9 @@
             [mcp-injector.core :as core]
             [mcp-injector.test-mcp-server :as test-mcp]
             [mcp-injector.test-llm-server :as test-llm]))
+
+(defn- body->string [body]
+  (if (string? body) body (slurp body)))
 
 ;; Test infrastructure state
 (def ^:dynamic *test-mcp* nil)
@@ -22,7 +25,11 @@
         injector-server (core/start-server {:port 0
                                             :host "127.0.0.1"
                                             :llm-url (str "http://localhost:" (:port llm-server))
-                                            :mcp-config "./mcp-servers.edn"})]
+                                            :mcp-servers {:servers {:stripe {:url (str "http://localhost:" (:port mcp-server))
+                                                                             :tools [:retrieve_customer :list_charges]}
+                                                                    :postgres {:url (str "http://localhost:" (:port mcp-server))
+                                                                               :tools [:query]}}
+                                                          :llm-gateway {:url (str "http://localhost:" (:port llm-server))}}})]
     (try
       (binding [*test-mcp* mcp-server
                 *test-llm* llm-server
@@ -53,7 +60,7 @@
                                         :method "tools/list"
                                         :params {}})
                                 :headers {"Content-Type" "application/json"}})
-          body (json/parse-string (:body response) true)]
+          body (json/parse-string (body->string (:body response)) true)]
       (is (= 200 (:status response)))
       (is (= "2.0" (:jsonrpc body)))
       (is (vector? (get-in body [:result :tools])))))
@@ -69,7 +76,7 @@
                                         :messages [{:role "user"
                                                     :content "Test"}]})
                                 :headers {"Content-Type" "application/json"}})
-          body (json/parse-string (:body response) true)]
+          body (json/parse-string (body->string (:body response)) true)]
       (is (= 200 (:status response)))
       (is (= "Hello from test" (get-in body [:choices 0 :message :content]))))))
 
@@ -89,7 +96,7 @@
                                                     :content "Hello, can you help me?"}]
                                         :stream false})
                                 :headers {"Content-Type" "application/json"}})
-          body (json/parse-string (:body response) true)]
+          body (json/parse-string (body->string (:body response)) true)]
 
       ;; Verify response
       (is (= 200 (:status response)))
@@ -101,10 +108,14 @@
 
 (deftest single-tool-call
   (testing "User request requires one tool call. Agent loop executes tool and returns result"
-    ;; Setup
+    ;; Setup discovery turns
     (test-llm/clear-responses *test-llm*)
     (test-llm/set-tool-call-response *test-llm*
-                                     [{:name "stripe.retrieve_customer"
+                                     [{:name "get_tool_schema"
+                                       :arguments {:server "stripe"
+                                                   :tool "retrieve_customer"}}])
+    (test-llm/set-tool-call-response *test-llm*
+                                     [{:name "mcp__stripe__retrieve_customer"
                                        :arguments {:customer_id "cus_123"}}])
     (test-llm/set-next-response *test-llm*
                                 {:role "assistant"
@@ -118,30 +129,37 @@
                                                     :content "Find customer cus_123"}]
                                         :stream false})
                                 :headers {"Content-Type" "application/json"}})
-          body (json/parse-string (:body response) true)]
+          body (json/parse-string (body->string (:body response)) true)]
 
       ;; Verify final response
       (is (= 200 (:status response)))
       (is (str/includes? (get-in body [:choices 0 :message :content]) "customer@example.com"))
 
-      ;; Verify LLM was called twice (initial + after tool)
-      (is (= 2 (count @(:received-requests *test-llm*)))))))
+      ;; Verify LLM was called 3 times (discovery + execution + final)
+      (is (= 3 (count @(:received-requests *test-llm*)))))))
 
 (deftest multi-turn-agent-loop
   (testing "User request requires multiple tool calls. Agent loop handles multiple turns"
-    ;; Setup: First tool call, second tool call, then final response
+    ;; Setup: Discovery 1, Call 1, Discovery 2, Call 2, then final response
     (test-llm/clear-responses *test-llm*)
     (test-llm/set-tool-call-response *test-llm*
-                                     [{:name "stripe.list_charges"
+                                     [{:name "get_tool_schema"
+                                       :arguments {:server "stripe"
+                                                   :tool "list_charges"}}])
+    (test-llm/set-tool-call-response *test-llm*
+                                     [{:name "mcp__stripe__list_charges"
                                        :arguments {:customer "cus_123"}}])
     (test-llm/set-tool-call-response *test-llm*
-                                     [{:name "postgres.query"
+                                     [{:name "get_tool_schema"
+                                       :arguments {:server "postgres"
+                                                   :tool "query"}}])
+    (test-llm/set-tool-call-response *test-llm*
+                                     [{:name "mcp__postgres__query"
                                        :arguments {:sql "SELECT * FROM analytics"}}])
     (test-llm/set-next-response *test-llm*
                                 {:role "assistant"
                                  :content "Here is your complete analytics report."})
 
-     ;; Test will verify full multi-turn flow
     (let [response @(http/post (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
                                {:body (json/generate-string
                                        {:model "gpt-4o-mini"
@@ -149,20 +167,19 @@
                                                     :content "Get my charges and analytics"}]
                                         :stream false})
                                 :headers {"Content-Type" "application/json"}})
-          _body (json/parse-string (:body response) true)]
+          _body (json/parse-string (body->string (:body response)) true)]
 
-      ;; Verify final response - just check status for now
-      ;; (full multi-turn agent loop needs more work)
       (is (= 200 (:status response)))
-
-      ;; Verify LLM was called at least twice (initial + at least one tool)
-      (is (>= (count @(:received-requests *test-llm*)) 2)))))
+      ;; LLM called 5 times
+      (is (= 5 (count @(:received-requests *test-llm*)))))))
 
 (deftest get-tool-schema-meta-tool
   (testing "LLM calls get_tool_schema to discover tool details. Meta-tool returns full schema"
-    ;; Note: mcp.get_tool_schema is a meta-tool that queries MCP servers
-    ;; For this test, we simulate it being called but don't require full implementation
     (test-llm/clear-responses *test-llm*)
+    (test-llm/set-tool-call-response *test-llm*
+                                     [{:name "get_tool_schema"
+                                       :arguments {:server "stripe"
+                                                   :tool "retrieve_customer"}}])
     (test-llm/set-next-response *test-llm*
                                 {:role "assistant"
                                  :content "The stripe.retrieve_customer tool requires a customer_id parameter."})
@@ -175,20 +192,31 @@
                                                     :content "What parameters does stripe.retrieve_customer need?"}]
                                         :stream false})
                                 :headers {"Content-Type" "application/json"}})
-          body (json/parse-string (:body response) true)]
+          body (json/parse-string (body->string (:body response)) true)
+          requests @(:received-requests *test-llm*)]
 
-      ;; Verify response (meta-tools are passed through for now)
       (is (= 200 (:status response)))
-      (is (str/includes? (get-in body [:choices 0 :message :content]) "customer_id")))))
+      (is (str/includes? (get-in body [:choices 0 :message :content]) "customer_id"))
+      ;; Verify 2 calls to LLM (initial + after schema result)
+      (is (= 2 (count requests)))
+      ;; Verify schema was returned to LLM
+      ;; Messages: 0: System, 1: User, 2: Assistant (call), 3: Tool (result)
+      (is (str/includes? (get-in (last requests) [:messages 3 :content]) "retrieve_customer")))))
 
 (deftest max-iterations-limit
   (testing "Agent loop stops after max iterations. Infinite loop scenario is handled gracefully"
     ;; Setup: LLM always returns tool_calls
     (test-llm/clear-responses *test-llm*)
+    ;; First discovery
+    (test-llm/set-tool-call-response *test-llm*
+                                     [{:name "get_tool_schema"
+                                       :arguments {:server "stripe"
+                                                   :tool "retrieve_customer"}}])
+    ;; Then infinite calls
     (dotimes [_ 15]
       (test-llm/set-tool-call-response *test-llm*
-                                       [{:name "test.tool"
-                                         :arguments {}}]))
+                                       [{:name "mcp__stripe__retrieve_customer"
+                                         :arguments {:customer_id "cus_123"}}]))
 
     ;; Test will verify:
     ;; 1. Loop stops at max-iterations
@@ -201,7 +229,7 @@
                                                     :content "Infinite loop test"}]
                                         :stream false})
                                 :headers {"Content-Type" "application/json"}})
-          _body (json/parse-string (:body response) true)]
+          _body (json/parse-string (body->string (:body response)) true)]
 
       ;; Should eventually return even with infinite tool calls
       (is (= 200 (:status response))))))
@@ -212,7 +240,11 @@
     ;; For now, test that errors don't crash the system
     (test-llm/clear-responses *test-llm*)
     (test-llm/set-tool-call-response *test-llm*
-                                     [{:name "stripe.retrieve_customer"
+                                     [{:name "get_tool_schema"
+                                       :arguments {:server "stripe"
+                                                   :tool "retrieve_customer"}}])
+    (test-llm/set-tool-call-response *test-llm*
+                                     [{:name "mcp__stripe__retrieve_customer"
                                        :arguments {:customer_id "invalid_id"}}])
     (test-llm/set-next-response *test-llm*
                                 {:role "assistant"
@@ -229,7 +261,7 @@
       ;; Verify response (should handle error gracefully)
       (is (= 200 (:status response)))
       ;; LLM should see the error and respond
-      (is (>= (count @(:received-requests *test-llm*)) 2)))))
+      (is (>= (count @(:received-requests *test-llm*)) 3)))))
 
 (deftest stream-mode-sse-format
   (testing "Stream=true returns SSE format for OpenClaw compatibility - SSE stream is properly formatted"
@@ -273,7 +305,7 @@
                                                     :content "Test"}]
                                         :stream false})
                                 :headers {"Content-Type" "application/json"}})
-          body (json/parse-string (:body response) true)]
+          body (json/parse-string (body->string (:body response)) true)]
 
       ;; Should return 503 (retryable) not 502
       (is (= 503 (:status response)))
@@ -297,7 +329,7 @@
                                                     :content "Test"}]
                                         :stream false})
                                 :headers {"Content-Type" "application/json"}})
-          body (json/parse-string (:body response) true)]
+          body (json/parse-string (body->string (:body response)) true)]
 
       ;; Should return 503
       (is (= 503 (:status response)))
@@ -317,7 +349,7 @@
                                                     :content "Test"}]
                                         :stream false})
                                 :headers {"Content-Type" "application/json"}})
-          body (json/parse-string (:body response) true)]
+          body (json/parse-string (body->string (:body response)) true)]
 
       ;; Should return 502 (original behavior)
       (is (= 502 (:status response)))
@@ -336,7 +368,7 @@
                                                     :content "Test"}]
                                         :stream false})
                                 :headers {"Content-Type" "application/json"}})
-          body (json/parse-string (:body response) true)]
+          body (json/parse-string (body->string (:body response)) true)]
 
       ;; Should return 429
       (is (= 429 (:status response)))
@@ -384,7 +416,7 @@
                                                     :content "Test with virtual model"}]
                                         :stream false})
                                 :headers {"Content-Type" "application/json"}})
-          body (json/parse-string (:body response) true)]
+          body (json/parse-string (body->string (:body response)) true)]
 
       ;; Either we got success (fallback worked) or 503 (no fallback configured)
       ;; Both are acceptable behaviors
@@ -410,7 +442,7 @@
                                                     :content "Hello"}]
                                         :stream false})
                                 :headers {"Content-Type" "application/json"}})
-          body (json/parse-string (:body response) true)]
+          body (json/parse-string (body->string (:body response)) true)]
 
       (is (= 200 (:status response)))
       (is (= "Hello with usage!" (get-in body [:choices 0 :message :content])))
@@ -480,7 +512,7 @@
 
     ;; Query stats endpoint
     (let [response @(http/get (str "http://localhost:" (:port *injector*) "/stats"))
-          body (json/parse-string (:body response) true)]
+          body (json/parse-string (body->string (:body response)) true)]
 
       (is (= 200 (:status response)))
       (is (contains? body :stats))
