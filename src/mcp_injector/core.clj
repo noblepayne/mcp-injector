@@ -207,7 +207,9 @@
                                    cmd (:cmd s-conf)]
                                (if (or url cmd)
                                  (try (assoc acc s-name (mcp/discover-tools (name s-name) s-conf (:tools s-conf)))
-                                      (catch Exception _ acc))
+                                      (catch Exception e
+                                        (log-request "warn" "Discovery failed" {:server s-name :error (.getMessage e)})
+                                        acc))
                                  acc)))
                            {} (:servers mcp-servers))
         messages (config/inject-tools-into-messages (:messages chat-req) mcp-servers discovered)
