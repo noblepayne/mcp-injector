@@ -1,5 +1,6 @@
 (ns mcp-injector.control-api-test
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
+            [clojure.string :as str]
             [org.httpkit.client :as http]
             [cheshire.core :as json]
             [mcp-injector.core :as core]

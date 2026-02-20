@@ -205,6 +205,7 @@
 (defn- handle-chat-completion [request mcp-servers config]
   (let [chat-req (parse-body (:body request))
         model (:model chat-req)
+        _ (log-request "info" "Chat Completion Started" {:model model :stream (:stream chat-req)})
         discovered (reduce (fn [acc [s-name s-conf]]
                              (let [url (or (:url s-conf) (:uri s-conf))
                                    cmd (:cmd s-conf)]
@@ -227,6 +228,7 @@
     (if (:success result)
       (let [final-resp (:data result)
             _ (track-usage! model (:usage final-resp))
+            _ (log-request "info" "Chat Completion Success" {:model model :usage (:usage final-resp)})
             body (if (:stream chat-req)
                    (openai/build-chat-response-streaming
                     {:content (get-in final-resp [:choices 0 :message :content])

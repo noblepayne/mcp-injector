@@ -102,6 +102,7 @@
 (defn call-tool [server-id server-config tool-name arguments]
   (let [url (or (:url server-config)
                 (when (and (string? server-id) (str/starts-with? server-id "http")) server-id))]
+    (log-request "info" "Calling Tool" {:server server-id :tool tool-name})
     (cond
       (:cmd server-config) (stdio/call-tool server-id server-config tool-name arguments)
       url (let [resp (call-http url "tools/call" {:name tool-name :arguments arguments})]

@@ -30,6 +30,7 @@ mcp-injector makes your LLM integration resilient. When a provider rate-limits y
 - ✅ **Error translation** - Converts "Cannot read properties of undefined" into "Context overflow: prompt too large"
 - ✅ **Smart retry logic** - Retries on 429/500, propagates 503 to trigger compression
 - ✅ **Multi-transport MCP** - Support for both HTTP and STDIO (local process) MCP servers
+- ✅ **Control & Observability API** - Unified `/api/v1` for state inspection, tool discovery, and cache resets
 - ✅ MCP tool directory injection into system prompts
 - ✅ Agent loop with tool execution (LLM → tools → LLM...)
 - ✅ SSE streaming responses for OpenAI-compatible clients
@@ -80,14 +81,19 @@ Create `mcp-servers.edn`:
  ;; LLM gateway with virtual models and fallbacks
  :llm-gateway
  {:url "http://localhost:8080"
-...
+  :fallbacks ["zen/kimi-k2.5-free" "nvidia/moonshotai/kimi-k2.5"]
+  :virtual-models
+  {:brain
+   {:chain ["provider1/model1" "provider2/model2"]
+    :cooldown-minutes 5
+    :retry-on [429 500 503]}}}}
 ```
 
 Set environment variables (optional):
 
 ```bash
-export MCP_INJECTOR_PORT=8080
-export MCP_INJECTOR_BIFROST_URL=http://localhost:8081
+export MCP_INJECTOR_PORT=8088
+export MCP_INJECTOR_LLM_URL=http://localhost:8080
 export MCP_INJECTOR_MCP_CONFIG=./mcp-servers.edn
 export MCP_INJECTOR_MAX_ITERATIONS=10
 ```
@@ -97,7 +103,7 @@ export MCP_INJECTOR_MAX_ITERATIONS=10
 Once running, mcp-injector accepts OpenAI-compatible requests:
 
 ```bash
-curl -X POST http://localhost:8080/v1/chat/completions \
+curl -X POST http://localhost:8088/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "gpt-4o-mini",
@@ -105,6 +111,17 @@ curl -X POST http://localhost:8080/v1/chat/completions \
     "stream": true
   }'
 ```
+
+## Control API
+
+mcp-injector provides a unified JSON API for observability and state management:
+
+- `GET /api/v1/status`: Quick health check and version.
+- `GET /api/v1/mcp/tools`: List all discovered tools and session states.
+- `POST /api/v1/mcp/reset`: Force clear caches and restart local processes.
+- `GET /api/v1/llm/state`: Inspect provider cooldowns and total usage.
+- `POST /api/v1/llm/cooldowns/reset`: Clear all provider cooldowns.
+- `GET /api/v1/stats`: Legacy/Detailed usage telemetry.
 
 ## Architecture
 
@@ -187,37 +204,12 @@ We follow **grumpy pragmatic** Clojure development:
 
 See `AGENTS.md` for detailed guidelines.
 
-## Project Structure
-
-```
-mcp-injector/
-├── src/
-│   └── mcp_injector/
-│       ├── core.clj           # HTTP server, main entry
-│       ├── config.clj         # Configuration, env vars
-│       ├── openai_compat.clj  # SSE, OpenAI API compat
-│       ├── mcp_client.clj     # MCP HTTP client
-│       └── agent_loop.clj     # Agent execution loop
-├── test/
-│   └── mcp_injector/
-│       ├── test_mcp_server.clj      # Test MCP server
-│       ├── test_llm_server.clj  # Test LLM simulator
-│       └── integration_test.clj     # Full stack tests
-├── dev/
-│   ├── backlog.edn      # Task list
-│   ├── current.edn      # Current session
-│   ├── log.md          # Development log
-│   └── decisions.edn   # Architecture decisions
-├── bb.edn              # Babashka config
-├── mcp-servers.edn     # MCP server definitions
-└── AGENTS.md           # Development guidelines
-```
-
 ## Features
 
 **Implemented:**
 
 - ✅ **Multi-transport MCP** - Support for both HTTP and STDIO (local process) MCP servers
+- ✅ **Control & Observability API** - Unified `/api/v1` for state inspection and resets
 - ✅ HTTP server with OpenAI-compatible endpoint
 - ✅ Virtual model chains with automatic failover
 - ✅ Provider cooldown after failures
@@ -226,14 +218,13 @@ mcp-injector/
 - ✅ MCP tool directory injection
 - ✅ Agent loop with tool execution
 - ✅ SSE streaming
-- ✅ Real HTTP integration tests (38 tests, 128 assertions)
+- ✅ Real HTTP integration tests (42 tests, 140 assertions)
 
 **Future:**
 
-- ✅ Schema caching for faster startup
 - [ ] Tool categorization (full vs lazy injection)
 - [ ] Observability (OpenTelemetry)
-- [ ] Request/response metrics
+- [ ] Request/response metrics (Prometheus)
 
 ## License
 
@@ -245,4 +236,4 @@ See `AGENTS.md` for development guidelines and `dev/` for project tracking.
 
 ______________________________________________________________________
 
-**Status**: Production-ready | **Tests**: 14 passing, 40 assertions | **Built with**: Babashka + http-kit + Cheshire
+**Status**: Production-ready | **Tests**: 42 passing, 140 assertions | **Built with**: Babashka + http-kit + Cheshire
