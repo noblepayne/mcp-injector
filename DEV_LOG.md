@@ -75,3 +75,94 @@ Unexpected character ('_' (code 95)): was expecting comma to separate Object ent
 The `"_after"` suggests the LLM is outputting malformed JSON where `insert_after` got corrupted.
 
 **Status:** Not yet investigated.
+
+---
+
+## STDIO Transport Support (2026-02-20)
+
+### Research Summary
+
+**Babashka/process** - available in bb.edn:
+- `process` - creates subprocess with configurable stdin/stdout
+- `alive?` - check if process running
+- `destroy` / `destroy-tree` - kill process
+- Supports env vars, working dir, etc.
+
+**core.async in Babashka:**
+- `go` blocks use thread pool (8 threads default), NOT true async
+- `thread` - spawns real threads
+- For many concurrent stdio connections, need to use `thread` or increase pool
+
+### Design
+
+#### Config Interface
+```clojure
+;; mcp-servers.edn
+{:servers
+ {:stripe
+  ;; HTTP transport (existing)
+  {:url "http://localhost:3000/mcp"
+   :tools ["retrieve_customer"]}
+  
+  ;; STDIO transport (new)
+  {:cmd "npx -y @modelcontextprotocol/server-filesystem /tmp/files"
+   :env {:API_KEY "xxx"}  ;; optional env vars
+   :cwd "/home/user"       ;; optional working dir
+   :tools ["read_file" "write_file"]}}}
+
+;; Transport detection: if :cmd or :command present → stdio, else → HTTP
+```
+
+#### Architecture
+
+```
+mcp_client.clj (dispatch)
+    ├── mcp_client_http.clj (existing, http-kit)
+    └── mcp_client_stdio.clj (new, babashka/process)
+```
+
+Both implement common protocol:
+- `initialize! [server-config]` → session
+- `list-tools [session]` → [tools]
+- `call-tool [session tool-name args]` → result
+- `close [session]` → nil
+
+#### Process Management (mcp_client_stdio.clj)
+
+```clojure
+;; For each stdio server:
+1. Spawn: (process {:in :pipe :out :pipe :err :pipe} "npx -y server")
+2. Read stdout in thread (line-by-line JSON-RPC)
+3. Write stdin (JSON-RPC requests)
+4. Handle initialize handshake
+5. On close: (destroy p)
+```
+
+#### Key Implementation Details
+
+- **One process per server** - stdio is single-session
+- **Thread per stdout reader** - read lines, parse JSON-RPC
+- **Channels for responses** - correlate requests/responses by id
+- **Process lifecycle** - start on first use, keep alive, destroy on shutdown
+
+#### Dependencies
+
+Add to bb.edn:
+```clojure
+babashka/process {:git/url "https://github.com/babashka/process"
+                 :sha "..."}
+```
+
+#### Testing
+
+- `test_mcp_stdio_server.clj` - spawns a simple stdio MCP server (like test_mcp_server but stdio)
+- Same test patterns as HTTP tests
+
+### Tasks
+
+- [ ] Add babashka/process dependency
+- [ ] Create mcp_client_stdio.clj with process management
+- [ ] Update mcp_client.clj to dispatch by transport
+- [ ] Update config.clj to detect transport type
+- [ ] Add stdio tests
+- [ ] Integration tests with both transports
