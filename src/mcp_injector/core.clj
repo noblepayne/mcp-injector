@@ -248,14 +248,15 @@
 
 (defn get-gateway-state []
   {:cooldowns @cooldown-state
-   :usage @usage-stats})
+   :usage @usage-stats
+   :warming-up? (not (realized? (get @server-state :warmup-future)))})
 
 (defn- handle-api [request _mcp-servers _config]
   (let [uri (:uri request)
         method (:request-method request)]
     (case [method uri]
       [:get "/api/v1/status"]
-      {:status 200 :body (json/generate-string {:status "ok" :version "1.0.0"})}
+      {:status 200 :body (json/generate-string {:status "ok" :version "1.0.0" :warming-up? (:warming-up? (get-gateway-state))})}
 
       [:get "/api/v1/mcp/tools"]
       {:status 200 :body (json/generate-string (mcp/get-cache-state))}
@@ -303,7 +304,8 @@
                       (:virtual-models config) (assoc-in [:llm-gateway :virtual-models] (:virtual-models config))
                       (:llm-url config) (assoc-in [:llm-gateway :url] (:llm-url config)))
         llm-url (config/get-llm-url mcp-servers)
-        s (http/run-server (fn [req] (handler req mcp-servers config)) {:port (or port 0) :ip host})]
+        s (http/run-server (fn [req] (handler req mcp-servers config)) {:port (or port 0) :ip host})
+        warmup (future (mcp/warm-up! mcp-servers))]
     (log-request "info" "mcp-injector started"
                  {:port (:local-port (meta s))
                   :host host
@@ -311,12 +313,18 @@
                   :mcp-config-path (or mcp-config "default")
                   :log-level (:log-level config)
                   :max-iterations (:max-iterations config)})
-    (reset! server-state s)
+    (reset! server-state {:server s :warmup-future warmup})
     {:port (:local-port (meta s))
      :stop s}))
 
 (defn stop-server [s]
-  (when s (if (fn? s) (s :timeout 100) ((:stop s) :timeout 100)) (reset! server-state nil) (mcp/clear-tool-cache!)))
+  (when s
+    (let [srv (if (fn? s) s (:server s))
+          fut (when (map? s) (:warmup-future s))]
+      (when fut (future-cancel fut))
+      (srv :timeout 100)
+      (reset! server-state nil)
+      (mcp/clear-tool-cache!))))
 
 (defn clear-mcp-sessions! []
   (mcp/clear-tool-cache!))

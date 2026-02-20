@@ -151,3 +151,19 @@
   {:tools @tool-cache
    :http-sessions @http-sessions
    :stdio-sessions (stdio/get-active-sessions)})
+
+(defn warm-up! [mcp-config]
+  (let [servers (:servers mcp-config)]
+    (log-request "info" "Proactive warm-up started" {:servers (keys servers)})
+    (let [results (doall (pmap (fn [[id config]]
+                                 (try
+                                   (let [tools (discover-tools (name id) config nil)]
+                                     {:id id :success (not (:error tools))})
+                                   (catch Exception e
+                                     {:id id :success false :error (.getMessage e)})))
+                               servers))
+          success-count (count (filter :success results))]
+      (log-request "info" "Proactive warm-up complete"
+                   {:successful success-count
+                    :failed (- (count results) success-count)
+                    :details results}))))
