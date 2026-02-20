@@ -280,4 +280,8 @@
 (defn clear-mcp-sessions! []
   (mcp/clear-tool-cache!))
 
-(defn -main [& _args] (start-server (config/load-config)))
+(defn -main [& _args]
+  (let [initial-config (config/load-config)
+        mcp-servers (config/load-mcp-servers (:mcp-config initial-config))
+        unified-config (config/get-config mcp-servers)]
+    (start-server unified-config)))
