@@ -5,6 +5,7 @@
             [org.httpkit.client :as http-client]
             [cheshire.core :as json]
             [clojure.string :as str]
+            [clojure.walk :as walk]
             [mcp-injector.config :as config]
             [mcp-injector.openai-compat :as openai]
             [mcp-injector.mcp-client :as mcp]))
@@ -36,6 +37,9 @@
                     #"(?i)request size exceeds"]]
       (some #(re-find % error-str) patterns))))
 
+(defn- body->string [body]
+  (if (string? body) body (slurp body)))
+
 (defn- translate-error-for-openclaw
   "Translate upstream errors into OpenClaw-recognizable format.
    Returns map with :message, :status, and :type."
@@ -56,46 +60,134 @@
 
 (def ^:private log-levels {"debug" 0 "info" 1 "warn" 2 "error" 3})
 
+(defn- scrub-sensitive
+  "Deeply redact common sensitive keys in maps"
+  [data]
+  (walk/postwalk
+   (fn [x]
+     (if (and (map-entry? x)
+              (contains? #{:api_key :api-key :token :password :secret :auth}
+                         (keyword (str/lower-case (name (key x))))))
+       [(key x) "[REDACTED]"]
+       x))
+   data))
+
+(defn- truncate-data
+  "Recursively truncate large strings in data structure"
+  [data limit]
+  (walk/postwalk
+   (fn [x]
+     (if (string? x)
+       (if (> (count x) limit)
+         (str (subs x 0 limit) "... (truncated)")
+         x)
+       x))
+   data))
+
 (defn- log-request
-  "Log structured request info if level >= configured log level"
+  "Log structured request info if level >= configured log level.
+   Truncates data for INFO level to keep logs readable."
   [level msg data]
-  (let [config-level (get log-levels *log-level* "info")
-        msg-level (get log-levels level "info")]
+  (let [config-level (get log-levels *log-level* 1)
+        msg-level (get log-levels level 1)]
     (when (>= msg-level config-level)
-      (println (str "{"
-                    "\"timestamp\":\"" (java.time.Instant/now) "\","
-                    "\"level\":\"" level "\","
-                    "\"message\":\"" msg "\","
-                    "\"data\":" (json/generate-string data) "}")))))
+      (let [clean-data (cond-> (scrub-sensitive data)
+                         (= level "info") (truncate-data 256))
+            log-entry {:timestamp (str (java.time.Instant/now))
+                       :level level
+                       :message msg
+                       :data clean-data}]
+        (println (json/generate-string log-entry))))))
+
+(defn- extract-discovered-tools
+  "Scan messages for tool schemas returned by get_tool_schema"
+  [messages]
+  (let [tools (->> messages
+                   (filter #(= "tool" (:role %)))
+                   (map #(try (json/parse-string (body->string (:content %)) true) (catch Exception _ nil)))
+                   (filter #(:name %))
+                   (map (fn [schema]
+                          {:type "function"
+                           :function (if (:function schema)
+                                       (:function schema)
+                                       {:name (:name schema)
+                                        :description (:description schema)
+                                        :parameters (:inputSchema schema)})})))
+        _ (when (seq tools) (log-request "info" "Discovered tools extracted" {:count (count tools) :names (map #(get-in % [:function :name]) tools)}))]
+    tools))
 
 (defn- prepare-llm-request
   "Transform OpenClaw request for LLM compatibility.
    - Strips stream=true flag (LLM needs stream=false)
    - Removes stream_options (only valid when stream=true)
-   - Injects fallbacks array for automatic provider failover"
+   - Injects fallbacks array for automatic provider failover
+   - Injects meta-tools and discovered tools"
   [openai-request fallbacks]
-  (-> openai-request
-      (assoc :stream false)
-      (dissoc :stream_options)
-      (assoc :fallbacks fallbacks)))
+  (let [meta-tools (config/get-meta-tool-definitions)
+        discovered-tools (extract-discovered-tools (:messages openai-request))
+        existing-tools (:tools openai-request)
+        merged-tools (concat (or existing-tools [])
+                             meta-tools
+                             discovered-tools)]
+    (-> openai-request
+        (assoc :stream false)
+        (dissoc :stream_options)
+        (assoc :fallbacks fallbacks)
+        (assoc :tools (vec (distinct merged-tools))))))
 
 (defn- is-mcp-tool?
-  "Check if a tool name is an MCP tool (format: server.tool)"
-  [tool-name mcp-servers]
+  "Check if a tool name is an MCP tool (format: mcp__[server]__[tool]) or a meta-tool"
+  [tool-name]
   (when (string? tool-name)
-    (let [[server-name _] (str/split tool-name #"\." 2)]
-      (contains? (:servers mcp-servers) (keyword server-name)))))
+    (cond
+      (= tool-name "get_tool_schema") true
+      (str/starts-with? tool-name "mcp__") true
+      :else false)))
 
 (defn- execute-mcp-tool
-  "Execute an MCP tool call"
-  [tool-call mcp-servers]
+  "Execute an MCP tool call or meta-tool"
+  [tool-call mcp-servers discovered-this-loop]
   (let [full-name (get-in tool-call [:function :name])
         args (json/parse-string (get-in tool-call [:function :arguments]) true)
-        [server-name tool-name] (str/split full-name #"\." 2)
-        server-url (get-in mcp-servers [:servers (keyword server-name) :url])]
-    (if server-url
-      (mcp/call-tool server-url tool-name args)
-      {:error (str "MCP server not found: " server-name)})))
+        _ (log-request "info" "Executing MCP tool" {:tool full-name :arguments args})]
+    (cond
+      (= full-name "get_tool_schema")
+      ;; Handle meta-tool: get_tool_schema
+      (let [{:keys [server tool]} args
+            server-url (get-in mcp-servers [:servers (keyword server) :url])]
+        (if server-url
+          (let [schema (mcp/get-tool-schema server-url tool)]
+            (if (:error schema)
+              (do (log-request "warn" "Discovery failed" {:tool full-name :error schema})
+                  schema)
+              (let [final-schema (assoc schema :name (str "mcp__" server "__" tool))]
+                (log-request "info" "Discovery successful" {:tool (:name final-schema)})
+                final-schema)))
+          (let [err {:error (str "MCP server not found: " server)}]
+            (log-request "error" "Server not found" {:server server})
+            err)))
+
+      ;; Handle namespaced MCP tool call
+      (str/starts-with? full-name "mcp__")
+      (if (contains? @discovered-this-loop full-name)
+        (let [[_ server-name tool-name] (str/split full-name #"__" 3)
+              server-url (get-in mcp-servers [:servers (keyword server-name) :url])]
+          (if server-url
+            (let [result (mcp/call-tool server-url tool-name args)]
+              (log-request "info" "Tool execution complete" {:tool full-name :success (not (:error result))})
+              result)
+            (let [err {:error (str "MCP server not found: " server-name)}]
+              (log-request "error" "Server not found" {:server server-name})
+              err)))
+        ;; Hallucination Trap
+        (let [err {:error (str "Protocol Violation: Parameters for '" full-name "' are unknown. You MUST call 'get_tool_schema' first to discover them.")}]
+          (log-request "warn" "Protocol Violation" {:tool full-name})
+          err))
+
+      :else
+      (let [err {:error (str "Unknown tool: " full-name)}]
+        (log-request "error" "Unknown tool type" {:tool full-name})
+        err))))
 
 (defn- build-tool-result-message
   "Build a tool result message for the conversation"
@@ -105,26 +197,23 @@
    :content (json/generate-string result)})
 
 (defn- call-llm
-  "Call LLM LLM gateway with prepared request.
+  "Call LLM gateway with prepared request.
    Returns {:success true :data response} or {:success false :status code :error error-data}"
   [llm-url request-body]
-  (let [request-json (json/generate-string request-body)
-        messages (:messages request-body)]
+  (let [url (str llm-url "/v1/chat/completions")
+        request-json (json/generate-string request-body)]
     (log-request "debug" "Sending request to LLM"
-                 {:url llm-url
+                 {:url url
                   :model (:model request-body)
-                  :message-count (count messages)
-                  :total-content-length (reduce + (map #(count (str (:content %))) messages))
-                  :has-tools (boolean (seq (:tools request-body)))
-                  :fallbacks-count (count (:fallbacks request-body))})
+                  :payload request-body})
     (try
       (let [response @(http-client/post (str llm-url "/v1/chat/completions")
                                         {:body request-json
                                          :headers {"Content-Type" "application/json"}
                                          :timeout LLM-TIMEOUT-MS})]
-        (log-request "debug" "Received response from LLM"
+        (log-request "debug" "Received raw response from LLM"
                      {:status (:status response)
-                      :url llm-url})
+                      :body (body->string (:body response))})
         (cond
         ;; Success
           (= 200 (:status response))
@@ -295,50 +384,57 @@
   "Process tool calls from LLM response.
    Executes MCP tools, passes through non-MCP tools.
    Returns map with :content and :tool-calls (for pass-through)"
-  [message mcp-servers messages-with-tools model fallbacks llm-url]
-  (let [tool-calls (:tool_calls message)
-        content (:content message)]
+  ([message mcp-servers messages model fallbacks llm-url]
+   (process-tool-calls message mcp-servers messages model fallbacks llm-url 0 (atom #{})))
+  ([message mcp-servers messages model fallbacks llm-url iteration discovered-this-loop]
+   (let [tool-calls (:tool_calls message)
+         content (:content message)]
 
-    (if (empty? tool-calls)
-      ;; No tool calls
-      {:content content
-       :tool-calls nil}
+     (if (or (empty? tool-calls) (>= iteration 10))
+       ;; No more tool calls or max iterations reached
+       {:content content
+        :tool-calls nil}
 
-      ;; Has tool calls - separate MCP and non-MCP
-      (let [mcp-calls (filter #(is-mcp-tool? (get-in % [:function :name]) mcp-servers) tool-calls)
-            non-mcp-calls (remove #(is-mcp-tool? (get-in % [:function :name]) mcp-servers) tool-calls)]
+        ;; Has tool calls - separate MCP and non-MCP
+       (let [mcp-calls (filter #(is-mcp-tool? (get-in % [:function :name])) tool-calls)
+             non-mcp-calls (remove #(is-mcp-tool? (get-in % [:function :name])) tool-calls)]
 
-        (if (empty? mcp-calls)
-          ;; All non-MCP - pass through
-          {:content content
-           :tool-calls non-mcp-calls}
+         (if (empty? mcp-calls)
+           ;; All non-MCP - pass through
+           {:content content
+            :tool-calls non-mcp-calls}
 
-          ;; Has MCP tools - execute them and get final response
-          (let [;; Execute MCP tools
-                mcp-results (map #(execute-mcp-tool % mcp-servers) mcp-calls)
-                mcp-tool-messages (map build-tool-result-message mcp-calls mcp-results)
+           ;; Has MCP tools - execute them and continue loop
+           (let [;; Execute MCP tools
+                 mcp-results (map #(execute-mcp-tool % mcp-servers discovered-this-loop) mcp-calls)
+                 mcp-tool-messages (map build-tool-result-message mcp-calls mcp-results)
 
-                ;; Build assistant message
-                assistant-msg (assoc message :role "assistant")
+                 ;; Update discovery set if any schemas were returned
+                 _ (doseq [res mcp-results]
+                     (when (and (map? res) (:name res))
+                       (swap! discovered-this-loop conj (:name res))))
 
-                ;; Combine messages
-                all-messages (concat messages-with-tools
-                                     [assistant-msg]
-                                     mcp-tool-messages)
+                 ;; Build assistant message
+                 assistant-msg (assoc message :role "assistant")
 
-                ;; Call LLM again
-                follow-up-req (prepare-llm-request
-                               {:model model
-                                :messages all-messages}
-                               fallbacks)
-                follow-up-result (call-llm llm-url follow-up-req)]
+                 ;; Combine messages
+                 all-messages (concat messages
+                                      [assistant-msg]
+                                      mcp-tool-messages)
 
-            (if (:success follow-up-result)
-              {:content (get-in (:data follow-up-result) [:choices 0 :message :content])
-               :tool-calls nil}
-              ;; Error in follow-up call
-              {:error (:error follow-up-result)
-               :status (:status follow-up-result 500)})))))))
+                 ;; Call LLM again
+                 follow-up-req (prepare-llm-request
+                                {:model model
+                                 :messages (vec all-messages)}
+                                fallbacks)
+                 follow-up-result (call-llm llm-url follow-up-req)]
+
+             (if (:success follow-up-result)
+               (let [next-message (get-in (:data follow-up-result) [:choices 0 :message])]
+                 (recur next-message mcp-servers all-messages model fallbacks llm-url (inc iteration) discovered-this-loop))
+               ;; Error in follow-up call
+               {:error (:error follow-up-result)
+                :status (:status follow-up-result 500)}))))))))
 
 (declare get-available-providers set-cooldown!)
 
@@ -422,22 +518,26 @@
   [request config mcp-servers]
   (try
     (let [body-str (slurp (:body request))
-          _ (log-request "debug" "Received request from OpenClaw"
-                         {:content-type (get-in request [:headers "content-type"])
-                          :body-size (count body-str)})
           chat-req (json/parse-string body-str true)
           model (:model chat-req)
-          messages (:messages chat-req)
+          original-messages (:messages chat-req)
+          _ (log-request "info" "Received request from OpenClaw"
+                         {:model model
+                          :message-count (count original-messages)})
+          ;; Inject tools directory BEFORE the first call
+          messages (if (seq (:servers mcp-servers))
+                     (config/inject-tools-into-messages original-messages mcp-servers)
+                     original-messages)
           stream-mode (:stream chat-req)
           virtual-models (config/get-virtual-models mcp-servers)
           virtual-config (or (get virtual-models model)
                              (get virtual-models (keyword model)))
           llm-url (:llm-url config)
-          _ (log-request "debug" "Checking for virtual model"
+          _ (log-request "info" "Checking for virtual model"
                          {:requested-model model
-                          :is-virtual (boolean virtual-config)
-                          :virtual-models (keys virtual-models)})
-          prepared-req (prepare-llm-request (assoc chat-req :messages messages) [])
+                          :is-virtual (boolean virtual-config)})
+          fallbacks (config/get-llm-fallbacks mcp-servers)
+          prepared-req (prepare-llm-request (assoc chat-req :messages messages) fallbacks)
           llm-result (if virtual-config
                        (try-virtual-model-chain virtual-config
                                                 prepared-req
@@ -446,13 +546,7 @@
       (if (:success llm-result)
         (let [llm-response (:data llm-result)
               message (get-in llm-response [:choices 0 :message])
-              tool-directory (when (seq (:servers mcp-servers))
-                               (config/build-tool-directory mcp-servers))
-              messages-with-tools (if (seq tool-directory)
-                                    (config/inject-tools-into-messages messages tool-directory)
-                                    messages)
-              fallbacks (config/get-llm-fallbacks mcp-servers)
-              result (process-tool-calls message mcp-servers messages-with-tools
+              result (process-tool-calls message mcp-servers messages
                                          model fallbacks llm-url)]
           (if (:error result)
             (let [error-data (:error result)
@@ -529,8 +623,8 @@
 
 (defn start-server
   "Start the mcp-injector HTTP server"
-  [{:keys [port host llm-url mcp-config virtual-models log-level]}]
-  (let [mcp-servers (config/load-mcp-servers mcp-config)
+  [{:keys [port host llm-url mcp-config mcp-servers virtual-models log-level]}]
+  (let [mcp-servers (or mcp-servers (config/load-mcp-servers mcp-config))
         mcp-servers-with-virtual (if virtual-models
                                    (assoc-in mcp-servers [:llm-gateway :virtual-models] virtual-models)
                                    mcp-servers)
@@ -548,6 +642,10 @@
     (println (str "mcp-injector started on http://" host ":" actual-port))
     {:port actual-port
      :stop srv}))
+
+(defn clear-mcp-sessions! []
+  (mcp/clear-sessions!)
+  (mcp/clear-schema-cache!))
 
 (defn stop-server
   "Stop the mcp-injector server"

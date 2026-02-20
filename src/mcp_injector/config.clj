@@ -11,7 +11,7 @@
    :llm-url "http://localhost:8080"
    :mcp-config "./mcp-servers.edn"
    :max-iterations 10
-   :log-level "info"
+   :log-level "debug"
    :timeout-ms 1800000})
 
 (defn env-var
@@ -64,10 +64,32 @@
     {:name (str (name server-name) "." (name tool-name))
      :server (name server-name)}))
 
-(defn inject-tools-into-messages [messages tool-directory]
-  (let [tool-lines (map #(str "- " (:name %) " (server: " (:server %) ")")
-                        tool-directory)
-        directory-text (str "Available tools:\n" (str/join "\n" tool-lines))
+(defn get-meta-tool-definitions
+  "Get definitions for meta-tools like get_tool_schema"
+  []
+  [{:type "function"
+    :function {:name "get_tool_schema"
+               :description "Fetch the full JSON schema for a specific MCP tool to understand its parameters."
+               :parameters {:type "object"
+                            :properties {:server {:type "string"
+                                                  :description "The name of the MCP server (e.g., 'stripe')"}
+                                         :tool {:type "string"
+                                                :description "The name of the tool (e.g., 'retrieve_customer')"}}
+                            :required ["server" "tool"]}}}])
+
+(defn inject-tools-into-messages [messages mcp-config]
+  (let [servers (:servers mcp-config)
+        tool-lines (for [[server-name server-config] servers]
+                     (str "- mcp__" (name server-name) ": " (str/join ", " (map name (:tools server-config)))))
+        directory-text (str "## Remote Capabilities (Injected)\n"
+                            "You have access to namespaced tools (prefix: mcp__).\n\n"
+                            "### Remote Directory:\n"
+                            (str/join "\n" tool-lines)
+                            "\n\n### CALL PROTOCOL:\n"
+                            "1. IDENTIFY tool in the directory above.\n"
+                            "2. DISCOVER: Call `get_tool_schema(server, tool)` to get parameters.\n"
+                            "3. EXECUTE: Call `mcp__[server]__[tool](...)` with the discovered parameters.\n\n"
+                            "DO NOT guess parameters for mcp__ tools. You MUST discover them first via `get_tool_schema`.")
         system-msg {:role "system" :content directory-text}]
     (cons system-msg messages)))
 
@@ -89,7 +111,9 @@
                   "http://localhost:8080")
      :mcp-config (:mcp-config env)
      :max-iterations (:max-iterations env)
-     :log-level (:log-level env)
+     :log-level (or (env-var "MCP_INJECTOR_LOG_LEVEL")
+                    (:log-level file)
+                    (:log-level env))
      :timeout-ms (:timeout-ms env)
      :fallbacks (:fallbacks file)
      :virtual-models (:virtual-models file)}))
