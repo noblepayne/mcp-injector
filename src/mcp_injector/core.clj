@@ -319,10 +319,10 @@
 
 (defn stop-server [s]
   (when s
-    (let [srv (if (fn? s) s (:server s))
+    (let [srv (cond (fn? s) s (map? s) (:server s) :else s)
           fut (when (map? s) (:warmup-future s))]
       (when fut (future-cancel fut))
-      (srv :timeout 100)
+      (when (fn? srv) (srv :timeout 100))
       (reset! server-state nil)
       (mcp/clear-tool-cache!))))
 

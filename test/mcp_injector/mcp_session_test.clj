@@ -5,6 +5,7 @@
             [org.httpkit.client :as http]
             [cheshire.core :as json]
             [mcp-injector.core :as core]
+            [mcp-injector.mcp-client :as mcp]
             [mcp-injector.test-mcp-server :as test-mcp]
             [mcp-injector.test-llm-server :as test-llm]))
 
@@ -32,18 +33,18 @@
         (test-llm/stop-server llm-server)
         (test-mcp/stop-server mcp-server)))))
 
-(use-fixtures :once session-integration-fixture)
+(use-fixtures :each session-integration-fixture)
 
 (defn clear-mcp-requests-fixture
   [test-fn]
   (reset! (:received-requests *test-mcp*) [])
-  (core/clear-mcp-sessions!) ;; Use core to clear client sessions
   (test-fn))
 
 (use-fixtures :each clear-mcp-requests-fixture)
 
 (deftest mcp-session-handshake-works
   (testing "Injector performs initialize handshake and sends session ID in subsequent calls"
+    (mcp/clear-tool-cache!)
     (test-llm/clear-responses *test-llm*)
 
     ;; Setup a tool call turn to force MCP interaction
