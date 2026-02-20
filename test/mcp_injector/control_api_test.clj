@@ -11,12 +11,12 @@
 
 (defn- start-test-env [test-run]
   (let [mcp-server (test-mcp/start-test-mcp-server)
-        llm-server (test-llm/start-test-llm-server)
+        llm-server (test-llm/start-server)
         injector (core/start-server
                   {:port test-port
                    :host "127.0.0.1"
                    :mcp-servers {:servers {:stripe {:url (str "http://localhost:" (:port mcp-server))
-                                                   :tools ["retrieve_customer"]}}}
+                                                    :tools ["retrieve_customer"]}}}
                    :llm-url (str "http://localhost:" (:port llm-server))})]
     (try
       (test-run)

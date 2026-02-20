@@ -250,7 +250,7 @@
   {:cooldowns @cooldown-state
    :usage @usage-stats})
 
-(defn- handle-api [request mcp-servers config]
+(defn- handle-api [request _mcp-servers _config]
   (let [uri (:uri request)
         method (:request-method request)]
     (case [method uri]
