@@ -76,7 +76,27 @@
   [mcp-config]
   (get-in mcp-config [:llm-gateway :virtual-models] {}))
 
-(defn get-llm-url
-  "Get LLM URL from config"
+(defn get-config
+  "Unified config: env vars override config file, with defaults as fallback.
+   Priority: env var > config file > default"
   [mcp-config]
-  (get-in mcp-config [:llm-gateway :url] "http://localhost:8080"))
+  (let [env (load-config)
+        file (:llm-gateway mcp-config)]
+    {:port (:port env)
+     :host (:host env)
+     :llm-url (or (env-var "MCP_INJECTOR_LLM_URL")
+                  (:url file)
+                  "http://localhost:8080")
+     :mcp-config (:mcp-config env)
+     :max-iterations (:max-iterations env)
+     :log-level (:log-level env)
+     :timeout-ms (:timeout-ms env)
+     :fallbacks (:fallbacks file)
+     :virtual-models (:virtual-models file)}))
+
+(defn get-llm-url
+  "Get LLM URL: env var overrides config file"
+  [mcp-config]
+  (or (env-var "MCP_INJECTOR_LLM_URL")
+      (get-in mcp-config [:llm-gateway :url])
+      "http://localhost:8080"))

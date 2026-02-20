@@ -534,13 +534,16 @@
         mcp-servers-with-virtual (if virtual-models
                                    (assoc-in mcp-servers [:llm-gateway :virtual-models] virtual-models)
                                    mcp-servers)
+        unified-config (config/get-config mcp-servers)
+        final-llm-url (or llm-url (:llm-url unified-config))
+        final-log-level (or log-level (:log-level unified-config))
         handler-fn (fn [request]
-                     (binding [*log-level* (or log-level "info")]
-                       (handler request {:llm-url llm-url :log-level log-level} mcp-servers-with-virtual)))
+                     (binding [*log-level* (or final-log-level "info")]
+                       (handler request {:llm-url final-llm-url :log-level final-log-level} mcp-servers-with-virtual)))
         srv (http/run-server handler-fn {:port port :host host})
         actual-port (:local-port (meta srv))]
     (reset! server-state {:server srv
-                          :config {:llm-url llm-url :log-level log-level}
+                          :config {:llm-url final-llm-url :log-level final-log-level}
                           :mcp-servers mcp-servers-with-virtual})
     (println (str "mcp-injector started on http://" host ":" actual-port))
     {:port actual-port
@@ -556,7 +559,9 @@
 (defn -main
   "Entry point for running mcp-injector"
   [& _args]
-  (let [config (config/load-config)]
+  (let [raw-config (config/load-config)
+        mcp-servers (config/load-mcp-servers (:mcp-config raw-config))
+        config (config/get-config mcp-servers)]
     (println "Starting mcp-injector...")
     (println "Config:" config)
     (start-server config)
