@@ -58,11 +58,27 @@
               (str (:provider fb) "/" (:model fb))))
           fallbacks-config)))
 
-(defn build-tool-directory [mcp-config]
-  (for [[server-name server-config] (:servers mcp-config)
-        tool-name (:tools server-config)]
-    {:name (str (name server-name) "." (name tool-name))
-     :server (name server-name)}))
+(defn build-tool-directory 
+  "Build tool directory from mcp-config. 
+   If pre-discovered-tools map provided, use those; otherwise fall back to config :tools list."
+  ([mcp-config]
+   (build-tool-directory mcp-config nil))
+  ([mcp-config pre-discovered-tools]
+   (reduce
+     (fn [acc [server-name server-config]]
+       (let [server-url (or (:url server-config) (:uri server-config))
+             tool-names (:tools server-config)]
+         (if server-url
+           (let [tools (if (and pre-discovered-tools (get pre-discovered-tools server-name))
+                        (get pre-discovered-tools server-name)
+                        (map (fn [t] {:name (name t)}) tool-names))]
+             (into acc (map (fn [tool]
+                            {:name (str (name server-name) "." (:name tool))
+                             :server (name server-name)})
+                          tools)))
+           acc)))
+     []
+     (:servers mcp-config))))
 
 (defn get-meta-tool-definitions
   "Get definitions for meta-tools like get_tool_schema"
@@ -77,11 +93,28 @@
                                                 :description "The name of the tool (e.g., 'retrieve_customer')"}}
                             :required ["server" "tool"]}}}])
 
-(defn inject-tools-into-messages [messages mcp-config]
-  (let [servers (:servers mcp-config)
-        tool-lines (for [[server-name server-config] servers]
-                     (str "- mcp__" (name server-name) ": " (str/join ", " (map name (:tools server-config)))))
-        directory-text (str "## Remote Capabilities (Injected)\n"
+(defn inject-tools-into-messages
+  "Inject MCP tools directory into messages.
+   If pre-discovered-tools map provided (server-name -> [tools]), use those;
+   otherwise fall back to config :tools list."
+  ([messages mcp-config]
+   (inject-tools-into-messages messages mcp-config nil))
+  ([messages mcp-config pre-discovered-tools]
+   (let [servers (:servers mcp-config)
+         tool-lines (reduce
+                      (fn [lines [server-name server-config]]
+                        (let [server-url (or (:url server-config) (:uri server-config))
+                              tool-names (:tools server-config)]
+                          (if server-url
+                            (let [tools (if (and pre-discovered-tools (get pre-discovered-tools server-name))
+                                         (get pre-discovered-tools server-name)
+                                         (map name tool-names))
+                                  tool-str (str/join ", " tools)]
+                              (conj lines (str "- mcp__" (name server-name) ": " tool-str)))
+                            lines)))
+                      []
+                      servers)
+         directory-text (str "## Remote Capabilities (Injected)\n"
                             "You have access to namespaced tools (prefix: mcp__).\n\n"
                             "### Remote Directory:\n"
                             (str/join "\n" tool-lines)
@@ -90,8 +123,8 @@
                             "2. DISCOVER: Call `get_tool_schema(server, tool)` to get parameters.\n"
                             "3. EXECUTE: Call `mcp__[server]__[tool](...)` with the discovered parameters.\n\n"
                             "DO NOT guess parameters for mcp__ tools. You MUST discover them first via `get_tool_schema`.")
-        system-msg {:role "system" :content directory-text}]
-    (cons system-msg messages)))
+         system-msg {:role "system" :content directory-text}]
+     (cons system-msg messages))))
 
 (defn get-virtual-models
   "Get virtual models configuration from MCP servers config"

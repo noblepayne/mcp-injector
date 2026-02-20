@@ -541,7 +541,21 @@
                      (do
                        (log-request "info" "Injecting MCP tools directory"
                                     {:servers (keys (:servers mcp-servers))})
-                       (config/inject-tools-into-messages original-messages mcp-servers))
+                       (let [discovered (reduce
+                                          (fn [acc [server-name server-config]]
+                                            (let [url (or (:url server-config) (:uri server-config))
+                                                  tool-names (:tools server-config)]
+                                              (if url
+                                                (try
+                                                  (assoc acc server-name (mcp/discover-tools url tool-names))
+                                                  (catch Exception e
+                                                    (log-request "warn" "Failed to discover tools"
+                                                                 {:server (name server-name) :error (.getMessage e)})
+                                                    acc))
+                                                acc)))
+                                          {}
+                                          (:servers mcp-servers))]
+                         (config/inject-tools-into-messages original-messages mcp-servers discovered)))
                      original-messages)
           stream-mode (:stream chat-req)
           virtual-models (config/get-virtual-models mcp-servers)

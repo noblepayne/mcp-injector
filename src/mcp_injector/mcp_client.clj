@@ -149,3 +149,32 @@
           (swap! schema-cache assoc cache-key tool))
         (or tool
             {:error (str "Tool not found: " tool-name)})))))
+
+(def ^:private tool-cache (atom {})) ;; server-url -> [tools]
+
+(defn clear-tool-cache! []
+  (reset! tool-cache {}))
+
+(defn discover-tools
+  "Discover tools from an MCP server with caching and optional filtering.
+   - If tool-names is nil, returns all discovered tools
+   - If tool-names is empty, returns empty vector
+   - If tool-names is a vector, returns only matching tools"
+  [server-url tool-names]
+  (let [cache-key server-url]
+    (if-let [cached (get @tool-cache cache-key)]
+      (cond
+        (nil? tool-names) cached
+        (empty? tool-names) []
+        :else (filter (fn [tool]
+                       (some #(= (keyword (:name tool)) %)
+                             (map keyword tool-names)))
+                     cached))
+      (let [all-tools (list-tools server-url)]
+        (swap! tool-cache assoc cache-key all-tools)
+        (discover-tools server-url tool-names)))))
+
+(defn discover-all-tools
+  "Discover all tools from an MCP server without filtering (alias for discover-tools with nil)"
+  [server-url]
+  (discover-tools server-url nil))
