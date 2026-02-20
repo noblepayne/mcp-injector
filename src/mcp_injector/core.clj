@@ -306,8 +306,11 @@
         s (http/run-server (fn [req] (handler req mcp-servers config)) {:port (or port 0) :ip host})]
     (log-request "info" "mcp-injector started"
                  {:port (:local-port (meta s))
+                  :host host
                   :llm-gateway llm-url
-                  :mcp-config-path (or mcp-config "default")})
+                  :mcp-config-path (or mcp-config "default")
+                  :log-level (:log-level config)
+                  :max-iterations (:max-iterations config)})
     (reset! server-state s)
     {:port (:local-port (meta s))
      :stop s}))
