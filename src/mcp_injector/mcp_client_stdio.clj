@@ -79,7 +79,8 @@
                                   {:protocolVersion "2025-03-26"
                                    :capabilities {}
                                    :clientInfo {:name "mcp-injector" :version "1.0.0"}})
-          _ (send-request session "notifications/initialized" {})]
+          ;; Send initialized notification (no ID per spec)
+          _ (.println ^PrintWriter (:writer session) (json/generate-string {:jsonrpc "2.0" :method "notifications/initialized" :params {}}))]
       (if (:error init-resp)
         init-resp
         (do

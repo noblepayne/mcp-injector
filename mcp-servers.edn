@@ -1,8 +1,7 @@
  {:servers
   {:auphonic {:url "http://localhost:3003/mcp"
-              :tools ["list_presets" "create_production"]}
-   :stripe   {:url "http://localhost:3001/mcp"
-              :tools ["retrieve_customer" "list_charges"]}
+              :tools nil}
+   :nixos {:cmd ["nix" "run" "github:utensils/mcp-nixos"]}
     ;; Example local tool (uncomment to use)
     ;; :filesystem
     ;; {:cmd ["npx" "-y" "@modelcontextprotocol/server-filesystem" "/path/to/allowed/dir"]

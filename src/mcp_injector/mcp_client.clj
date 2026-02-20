@@ -38,13 +38,16 @@
         (if session-id
           (do
             (swap! http-sessions assoc server-url session-id)
-            ;; Send initialized notification
-            (http/post server-url
-                       {:body (json/generate-string {:jsonrpc "2.0" :method "notifications/initialized"})
-                        :headers {"Mcp-Session-Id" session-id
-                                  "Content-Type" "application/json"
-                                  "Accept" "application/json"
-                                  "MCP-Protocol-Version" PROTOCOL_VERSION}})
+            ;; Send initialized notification (no ID per spec)
+            (try
+              (http/post server-url
+                         {:body (json/generate-string {:jsonrpc "2.0" :method "notifications/initialized" :params {}})
+                          :headers {"Mcp-Session-Id" session-id
+                                    "Content-Type" "application/json"
+                                    "Accept" "application/json"
+                                    "MCP-Protocol-Version" PROTOCOL_VERSION}})
+              (catch Exception e
+                (log-debug "Failed to send initialized notification (ignoring)" {:error (.getMessage e)})))
             session-id)
           (throw (ex-info "No Mcp-Session-Id header in initialize response" {:headers headers}))))
       (throw (ex-info "Failed to initialize HTTP MCP session" {:status status :body (:body init-resp)})))))
