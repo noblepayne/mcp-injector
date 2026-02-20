@@ -74,6 +74,7 @@
   "List available tools from an MCP server"
   [server-url]
   (let [session-id (get-or-create-session! server-url)
+        _ (log-debug "Calling tools/list" {:url server-url :session-id session-id})
         body (build-request-body "tools/list" {} "list-req")
         response @(http/post server-url
                              {:body (json/generate-string body)
@@ -83,6 +84,7 @@
     (cond
       (= 200 status)
       (let [parsed (json/parse-string body-str true)]
+        (log-debug "tools/list success" {:url server-url :tool-count (count (get-in parsed [:result :tools]))})
         (get-in parsed [:result :tools] []))
 
       ;; Handle session expiration
@@ -101,6 +103,7 @@
   "Call a tool on an MCP server"
   [server-url tool-name arguments]
   (let [session-id (get-or-create-session! server-url)
+        _ (log-debug "Calling tools/call" {:url server-url :tool tool-name :session-id session-id})
         body (build-request-body "tools/call"
                                  {:name tool-name
                                   :arguments arguments}
@@ -113,6 +116,7 @@
     (cond
       (= 200 status)
       (let [parsed (json/parse-string body-str true)]
+        (log-debug "tools/call response" {:url server-url :tool tool-name :success (not (:error parsed))})
         (if (:error parsed)
           {:error (:error parsed)}
           (get-in parsed [:result :content])))

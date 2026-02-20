@@ -154,7 +154,8 @@
       (= full-name "get_tool_schema")
       ;; Handle meta-tool: get_tool_schema
       (let [{:keys [server tool]} args
-            server-url (get-in mcp-servers [:servers (keyword server) :url])]
+            server-url (or (get-in mcp-servers [:servers (keyword server) :url])
+                           (get-in mcp-servers [:servers (keyword server) :uri]))]
         (if server-url
           (let [schema (mcp/get-tool-schema server-url tool)]
             (if (:error schema)
@@ -171,7 +172,8 @@
       (str/starts-with? full-name "mcp__")
       (if (contains? @discovered-this-loop full-name)
         (let [[_ server-name tool-name] (str/split full-name #"__" 3)
-              server-url (get-in mcp-servers [:servers (keyword server-name) :url])]
+              server-url (or (get-in mcp-servers [:servers (keyword server-name) :url])
+                             (get-in mcp-servers [:servers (keyword server-name) :uri]))]
           (if server-url
             (let [result (mcp/call-tool server-url tool-name args)]
               (log-request "info" "Tool execution complete" {:tool full-name :success (not (:error result))})
@@ -392,12 +394,22 @@
 
      (if (or (empty? tool-calls) (>= iteration 10))
        ;; No more tool calls or max iterations reached
-       {:content content
-        :tool-calls nil}
+       (do
+         (when (>= iteration 10)
+           (log-request "warn" "Agent loop reached max iterations" {:iteration iteration}))
+         {:content content
+          :tool-calls nil})
 
-        ;; Has tool calls - separate MCP and non-MCP
+       ;; Has tool calls - separate MCP and non-MCP
        (let [mcp-calls (filter #(is-mcp-tool? (get-in % [:function :name])) tool-calls)
              non-mcp-calls (remove #(is-mcp-tool? (get-in % [:function :name])) tool-calls)]
+
+         (when (seq tool-calls)
+           (log-request "info" "Processing tool calls"
+                        {:total (count tool-calls)
+                         :mcp (count mcp-calls)
+                         :pass-through (count non-mcp-calls)
+                         :iteration iteration}))
 
          (if (empty? mcp-calls)
            ;; All non-MCP - pass through
@@ -526,7 +538,10 @@
                           :message-count (count original-messages)})
           ;; Inject tools directory BEFORE the first call
           messages (if (seq (:servers mcp-servers))
-                     (config/inject-tools-into-messages original-messages mcp-servers)
+                     (do
+                       (log-request "info" "Injecting MCP tools directory"
+                                    {:servers (keys (:servers mcp-servers))})
+                       (config/inject-tools-into-messages original-messages mcp-servers))
                      original-messages)
           stream-mode (:stream chat-req)
           virtual-models (config/get-virtual-models mcp-servers)
