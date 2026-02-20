@@ -244,20 +244,56 @@
                    (json/generate-string {:error {:message error-msg :type error-type :details (get-in result [:error :details])}}))]
         {:status status :headers {"Content-Type" (if (:stream chat-req) "text/event-stream" "application/json")} :body body}))))
 
+(defn get-gateway-state []
+  {:cooldowns @cooldown-state
+   :usage @usage-stats})
+
+(defn- handle-api [request mcp-servers config]
+  (let [uri (:uri request)
+        method (:request-method request)]
+    (case [method uri]
+      [:get "/api/v1/status"]
+      {:status 200 :body (json/generate-string {:status "ok" :version "1.0.0"})}
+
+      [:get "/api/v1/mcp/tools"]
+      {:status 200 :body (json/generate-string (mcp/get-cache-state))}
+
+      [:post "/api/v1/mcp/reset"]
+      (do (mcp/clear-tool-cache!)
+          {:status 200 :body (json/generate-string {:message "MCP state reset successful"})})
+
+      [:get "/api/v1/llm/state"]
+      {:status 200 :body (json/generate-string (get-gateway-state))}
+
+      [:post "/api/v1/llm/cooldowns/reset"]
+      (do (reset-cooldowns!)
+          {:status 200 :body (json/generate-string {:message "Cooldowns reset successful"})})
+
+      [:get "/api/v1/stats"]
+      {:status 200 :body (json/generate-string {:stats @usage-stats})}
+
+      {:status 404 :body (json/generate-string {:error "Not found"})})))
+
 (defn- handler [request mcp-servers config]
-  (case (:uri request)
-    "/v1/chat/completions"
-    (if (= :post (:request-method request))
-      (handle-chat-completion request mcp-servers config)
-      {:status 405 :body "Method not allowed"})
+  (let [uri (:uri request)]
+    (cond
+      (= uri "/v1/chat/completions")
+      (if (= :post (:request-method request))
+        (handle-chat-completion request mcp-servers config)
+        {:status 405 :body "Method not allowed"})
 
-    "/health"
-    {:status 200 :headers {"Content-Type" "application/json"} :body (json/generate-string {:status "ok"})}
+      (= uri "/health")
+      {:status 200 :headers {"Content-Type" "application/json"} :body (json/generate-string {:status "ok"})}
 
-    "/stats"
-    {:status 200 :headers {"Content-Type" "application/json"} :body (json/generate-string {:stats @usage-stats})}
+      (= uri "/stats")
+      {:status 200 :headers {"Content-Type" "application/json"} :body (json/generate-string {:stats @usage-stats})}
 
-    {:status 404 :body "Not found"}))
+      (str/starts-with? uri "/api/v1/")
+      (let [resp (handle-api request mcp-servers config)]
+        (assoc-in resp [:headers "Content-Type"] "application/json"))
+
+      :else
+      {:status 404 :body "Not found"})))
 
 (defn start-server [{:keys [port host mcp-config] :as config}]
   (let [mcp-servers (or (:mcp-servers config) (config/load-mcp-servers mcp-config))

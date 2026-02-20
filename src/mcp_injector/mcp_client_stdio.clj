@@ -119,3 +119,10 @@
     (reset! (:running session) false)
     (process/destroy (:process session)))
   (reset! sessions {}))
+
+(defn get-active-sessions []
+  (into {} (map (fn [[id session]]
+                  [id {:pid (:pid @(:process session))
+                       :running @(:running session)
+                       :pending-count (count @(:pending session))}])
+                @sessions)))

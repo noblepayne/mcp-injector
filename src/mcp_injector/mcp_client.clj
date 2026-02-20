@@ -145,3 +145,8 @@
         tool (first (filter #(= tool-name (:name %)) tools))]
     (or tool
         {:error (str "Tool not found: " tool-name)})))
+
+(defn get-cache-state []
+  {:tools @tool-cache
+   :http-sessions @http-sessions
+   :stdio-sessions (stdio/get-active-sessions)})
