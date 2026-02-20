@@ -10,11 +10,12 @@
 
 (def ^:const PROTOCOL_VERSION "2025-03-26")
 
-(defn- log-debug [msg data]
-  (println (json/generate-string {:timestamp (str (java.time.Instant/now))
-                                  :level "debug"
-                                  :message msg
-                                  :data data})))
+(defn- log-request [level message data]
+  (println (json/generate-string
+            {:timestamp (str (java.time.Instant/now))
+             :level level
+             :message message
+             :data data})))
 
 (defn- initialize-http-session! [server-url]
   (try
@@ -22,7 +23,7 @@
                      :params {:protocolVersion PROTOCOL_VERSION
                               :capabilities {}
                               :clientInfo {:name "mcp-injector" :version "1.0.0"}}}
-          _ (log-debug "Initializing HTTP MCP session" {:url server-url})
+          _ (log-request "debug" "Initializing HTTP MCP session" {:url server-url})
           init-resp (http/post server-url
                                {:body (json/generate-string init-body)
                                 :headers {"Content-Type" "application/json"
@@ -31,7 +32,7 @@
           status (:status init-resp)]
       (if (= 200 status)
         (let [headers (:headers init-resp)
-              _ (log-debug "Received initialize headers" {:headers headers})
+              _ (log-request "debug" "Received initialize headers" {:headers headers})
               session-id (or (get headers "mcp-session-id")
                              (get headers :mcp-session-id)
                              (get headers "Mcp-Session-Id")
@@ -48,12 +49,12 @@
                                       "Accept" "application/json"
                                       "MCP-Protocol-Version" PROTOCOL_VERSION}})
                 (catch Exception e
-                  (log-debug "Failed to send initialized notification (ignoring)" {:error (.getMessage e)})))
+                  (log-request "debug" "Failed to send initialized notification (ignoring)" {:error (.getMessage e)})))
               session-id)
             (throw (ex-info "No Mcp-Session-Id header in initialize response" {:headers headers}))))
         (throw (ex-info "Failed to initialize HTTP MCP session" {:status status :body (:body init-resp)}))))
     (catch Exception e
-      (log-debug "Session initialization failed" {:url server-url :error (.getMessage e)})
+      (log-request "debug" "Session initialization failed" {:url server-url :error (.getMessage e)})
       (throw e))))
 
 (defn- get-http-session! [server-url]
@@ -84,7 +85,7 @@
         :else body))
     (catch Exception e
       (let [msg (.getMessage e)]
-        (log-debug "HTTP call failed" {:url server-url :method method :error msg})
+        (log-request "debug" "HTTP call failed" {:url server-url :method method :error msg})
         {:error msg}))))
 
 (defn list-tools [server-id server-config]

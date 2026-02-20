@@ -9,6 +9,13 @@
 
 (def ^:private sessions (atom {})) ;; server-id -> session-state
 
+(defn- log-request [level message data]
+  (println (json/generate-string
+            {:timestamp (str (java.time.Instant/now))
+             :level level
+             :message message
+             :data data})))
+
 (defn- reader-loop [server-id in-reader pending-requests running]
   (try
     (loop []
@@ -28,7 +35,7 @@
             (reset! running false)))))
     (catch Exception e
       (when @running
-        (println "MCP Stdio [" server-id "] Reader error:" (.getMessage e))))))
+        (log-request "error" "MCP Stdio Reader error" {:server server-id :error (.getMessage e)})))))
 
 (defn- start-process [server-id cmd env cwd]
   (let [p (process/process
