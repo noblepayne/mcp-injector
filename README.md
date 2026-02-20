@@ -2,7 +2,7 @@
 
 > Resilient LLM gateway shim with virtual models, provider fallbacks, and MCP tool injection
 
-mcp-injector sits between an agent (like OpenClaw or any OpenAI-compatible client) and LLM gateways (like litellm, bifrost, etc.). It provides automatic failover across provider chains, translates cryptic errors into actionable messages, and injects MCP tool directories into prompts for agent execution.
+ mcp-injector sits between an agent (like OpenClaw or any OpenAI-compatible client) and LLM gateways (like litellm, bifrost, etc.). It provides automatic failover across provider chains, translates cryptic errors into actionable messages, and injects MCP tool directories into prompts for agent execution. It supports both remote HTTP MCP servers and local STDIO-based MCP servers.
 
 ## What It Does
 
@@ -15,9 +15,13 @@ mcp-injector makes your LLM integration resilient. When a provider rate-limits y
 └─────────────┘     └──────────────┘     │ bifrost)    │     └─────────────┘
                             │            └─────────────┘
                             │     ┌──────────┐     ┌──────────────┐
-                            └──▶  │ MCP Tool │────▶│ MCP Server   │
-                                  │ Execution│     │(stripe, etc.)│
-                                  └──────────┘     └──────────────┘
+                            ├──▶  │ MCP Tool │────▶│ HTTP Server  │
+                            │     │ Execution│     │(stripe, etc.)│
+                            │     └──────────┘     └──────────────┘
+                            │            │         ┌──────────────┐
+                            │            └────────▶│ Local Process│
+                            │                      │(stdio mcp)   │
+                            └─────────────────────▶└──────────────┘
 ```
 
 **Key Features:**
@@ -25,11 +29,13 @@ mcp-injector makes your LLM integration resilient. When a provider rate-limits y
 - ✅ **Virtual model chains** - Define fallback providers with cooldowns (e.g., try zen first, fall back to nvidia)
 - ✅ **Error translation** - Converts "Cannot read properties of undefined" into "Context overflow: prompt too large"
 - ✅ **Smart retry logic** - Retries on 429/500, propagates 503 to trigger compression
+- ✅ **Multi-transport MCP** - Support for both HTTP and STDIO (local process) MCP servers
 - ✅ MCP tool directory injection into system prompts
 - ✅ Agent loop with tool execution (LLM → tools → LLM...)
 - ✅ SSE streaming responses for OpenAI-compatible clients
 - ✅ Real HTTP integration tests (no mocks)
 - ✅ Babashka-based for fast startup (~100MB binary)
+
 
 ## Quick Start
 
@@ -59,29 +65,24 @@ bb run
 
 Create `mcp-servers.edn`:
 
-```clojure
-{:servers
-  {:stripe
-   {:url "http://localhost:3001/mcp"
-    :tools ["retrieve_customer" "list_charges"]}
-   :postgres
-   {:url "http://localhost:3002/mcp"
-    :tools ["query" "execute"]}}
+ ```clojure
+ {:servers
+   {:stripe
+    {:url "http://localhost:3001/mcp"
+     :tools ["retrieve_customer" "list_charges"]}
+    :postgres
+    {:url "http://localhost:3002/mcp"
+     :tools ["query" "execute"]}
+    :local-tool
+    {:cmd ["node" "/path/to/server.js"]
+     :env {"API_KEY" "sk_test_..."}
+     :cwd "/path/to/project"}}
 
- ;; LLM gateway with virtual models and fallbacks
- :llm-gateway
- {:url "http://localhost:8080"
-
-  ;; Virtual model with provider chain
-  :virtual-models
-  {:smart-model
-   {:chain ["provider-a/model-1"
-            "provider-b/model-1"
-            "provider-c/model-1"]
-    :cooldown-minutes 5
-    ;; Retry on rate limits (429) and server errors (500)
-    ;; Don't retry on 503 (context overflow) - let agent compress instead
-    :retry-on [429 500]}}}}
+  ;; LLM gateway with virtual models and fallbacks
+  :llm-gateway
+  {:url "http://localhost:8080"
+...
+```
 
 Set environment variables (optional):
 
@@ -89,7 +90,9 @@ Set environment variables (optional):
 export MCP_INJECTOR_PORT=8080
 export MCP_INJECTOR_BIFROST_URL=http://localhost:8081
 export MCP_INJECTOR_MCP_CONFIG=./mcp-servers.edn
+export MCP_INJECTOR_MAX_ITERATIONS=10
 ```
+
 
 ### Usage
 
@@ -109,11 +112,12 @@ curl -X POST http://localhost:8080/v1/chat/completions \
 
 ### Core Modules
 
-- **`core.clj`** - HTTP server, request handlers, main entry point
+ - **`core.clj`** - HTTP server, agent loop, main entry point
 - **`config.clj`** - Environment config, MCP server registry, tool injection
 - **`openai_compat.clj`** - OpenAI API parsing, SSE streaming
-- **`mcp_client.clj`** - MCP HTTP client (tools/list, tools/call)
-- **`agent_loop.clj`** - Agent execution loop with iteration limits
+- **`mcp_client.clj`** - MCP transport delegation (HTTP/STDIO)
+- **`mcp_client_stdio.clj`** - Subprocess-based transport implementation
+
 
 ### Data Flow
 
@@ -216,6 +220,7 @@ mcp-injector/
 
 **Implemented:**
 
+ - ✅ **Multi-transport MCP** - Support for both HTTP and STDIO (local process) MCP servers
 - ✅ HTTP server with OpenAI-compatible endpoint
 - ✅ Virtual model chains with automatic failover
 - ✅ Provider cooldown after failures
@@ -224,14 +229,15 @@ mcp-injector/
 - ✅ MCP tool directory injection
 - ✅ Agent loop with tool execution
 - ✅ SSE streaming
-- ✅ Real HTTP integration tests (14 tests, 40 assertions)
+- ✅ Real HTTP integration tests (38 tests, 128 assertions)
 
 **Future:**
 
-- [ ] Schema caching for faster startup
+- ✅ Schema caching for faster startup
 - [ ] Tool categorization (full vs lazy injection)
 - [ ] Observability (OpenTelemetry)
 - [ ] Request/response metrics
+
 
 ## License
 
