@@ -1,0 +1,96 @@
+
+Testing mcp-injector.integration-test
+{"timestamp":"2026-02-20T08:20:43.794600207Z","level":"info","message":"mcp-injector started","data":{"port":45089}}
+{"timestamp":"2026-02-20T08:20:43.798357722Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:44117"}}
+{"timestamp":"2026-02-20T08:20:43.800555424Z","level":"debug","message":"Received initialize headers","data":{"headers":{"content-length":"140","content-type":"application/json","date":"Fri, 20 Feb 2026 08:20:43 GMT","mcp-session-id":"9975cba0-be5d-4a69-bd77-6db99b1a1e90","server":"http-kit"}}}
+{"timestamp":"2026-02-20T08:20:43.805624712Z","level":"info","message":"Tool Loop","data":{"iteration":0,"calls":1}}
+{"timestamp":"2026-02-20T08:20:43.807006830Z","level":"info","message":"Tool Loop","data":{"iteration":1,"calls":1}}
+{"timestamp":"2026-02-20T08:20:43.808400216Z","level":"info","message":"Tool Loop","data":{"iteration":2,"calls":1}}
+{"timestamp":"2026-02-20T08:20:43.809744509Z","level":"info","message":"Tool Loop","data":{"iteration":3,"calls":1}}
+{"timestamp":"2026-02-20T08:20:43.811085433Z","level":"info","message":"Tool Loop","data":{"iteration":4,"calls":1}}
+{"timestamp":"2026-02-20T08:20:43.812564831Z","level":"info","message":"Tool Loop","data":{"iteration":5,"calls":1}}
+{"timestamp":"2026-02-20T08:20:43.813816229Z","level":"info","message":"Tool Loop","data":{"iteration":6,"calls":1}}
+{"timestamp":"2026-02-20T08:20:43.815012192Z","level":"info","message":"Tool Loop","data":{"iteration":7,"calls":1}}
+{"timestamp":"2026-02-20T08:20:43.816151800Z","level":"info","message":"Tool Loop","data":{"iteration":8,"calls":1}}
+{"timestamp":"2026-02-20T08:20:43.817175129Z","level":"info","message":"Tool Loop","data":{"iteration":9,"calls":1}}
+{"timestamp":"2026-02-20T08:20:43.820024943Z","level":"info","message":"Tool Loop","data":{"iteration":0,"calls":1}}
+{"timestamp":"2026-02-20T08:20:43.821161549Z","level":"info","message":"Tool Loop","data":{"iteration":1,"calls":1}}
+{"timestamp":"2026-02-20T08:20:43.823914906Z","level":"info","message":"Tool Loop","data":{"iteration":0,"calls":1}}
+{"timestamp":"2026-02-20T08:20:43.825397782Z","level":"info","message":"Tool Loop","data":{"iteration":1,"calls":1}}
+{"timestamp":"2026-02-20T08:20:43.827149215Z","level":"info","message":"Tool Loop","data":{"iteration":0,"calls":1}}
+{"timestamp":"2026-02-20T08:20:43.829904497Z","level":"warn","message":"LLM Error","data":{"status":500,"body":"{\"error\":{\"message\":\"Cannot read properties of undefined (reading 'prompt_tokens')\",\"type\":\"internal_server_error\",\"param\":null,\"code\":\"internal_server_error\"}}","translated":{"message":"Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.","status":503,"type":"context_overflow","details":{"error":{"message":"Cannot read properties of undefined (reading 'prompt_tokens')","type":"internal_server_error","param":null,"code":"internal_server_error"}}}}}
+{"timestamp":"2026-02-20T08:20:43.832679034Z","level":"warn","message":"LLM Error","data":{"status":500,"body":"{\"error\":{\"message\":\"context window exceeded\",\"type\":\"internal_server_error\",\"param\":null,\"code\":\"internal_server_error\"}}","translated":{"message":"Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.","status":503,"type":"context_overflow","details":{"error":{"message":"context window exceeded","type":"internal_server_error","param":null,"code":"internal_server_error"}}}}}
+{"timestamp":"2026-02-20T08:20:43.833771172Z","level":"warn","message":"LLM Error","data":{"status":500,"body":"{\"error\":{\"message\":\"Internal server error\",\"type\":\"internal_server_error\",\"param\":null,\"code\":\"internal_server_error\"}}","translated":{"message":"Upstream error","status":502,"type":"upstream_error","details":{"error":{"message":"Internal server error","type":"internal_server_error","param":null,"code":"internal_server_error"}}}}}
+{"timestamp":"2026-02-20T08:20:43.834885898Z","level":"warn","message":"LLM Error","data":{"status":429,"body":"{\"error\":{\"message\":\"Rate limit exceeded\",\"type\":\"rate_limit_exceeded\",\"param\":null,\"code\":\"rate_limit_exceeded\"}}","translated":{"message":"Rate limit exceeded","status":429,"type":"rate_limit_exceeded","details":{"error":{"message":"Rate limit exceeded","type":"rate_limit_exceeded","param":null,"code":"rate_limit_exceeded"}}}}}
+{"timestamp":"2026-02-20T08:20:43.835807574Z","level":"warn","message":"LLM Error","data":{"status":500,"body":"{\"error\":{\"message\":\"context window exceeded\",\"type\":\"internal_server_error\",\"param\":null,\"code\":\"internal_server_error\"}}","translated":{"message":"Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.","status":503,"type":"context_overflow","details":{"error":{"message":"context window exceeded","type":"internal_server_error","param":null,"code":"internal_server_error"}}}}}
+{"timestamp":"2026-02-20T08:20:43.837795052Z","level":"info","message":"Tool Loop","data":{"iteration":0,"calls":1}}
+{"timestamp":"2026-02-20T08:20:43.838856354Z","level":"info","message":"Tool Loop","data":{"iteration":1,"calls":1}}
+{"timestamp":"2026-02-20T08:20:43.839385911Z","level":"info","message":"Tool Loop","data":{"iteration":2,"calls":1}}
+{"timestamp":"2026-02-20T08:20:43.839908976Z","level":"info","message":"Tool Loop","data":{"iteration":3,"calls":1}}
+{"timestamp":"2026-02-20T08:20:43.841298878Z","level":"warn","message":"LLM Error","data":{"status":500,"body":"{\"error\":{\"message\":\"Cannot read properties of undefined (reading 'prompt_tokens')\",\"type\":\"internal_server_error\",\"param\":null,\"code\":\"internal_server_error\"}}","translated":{"message":"Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.","status":503,"type":"context_overflow","details":{"error":{"message":"Cannot read properties of undefined (reading 'prompt_tokens')","type":"internal_server_error","param":null,"code":"internal_server_error"}}}}}
+
+Testing mcp-injector.discovery-test
+{"timestamp":"2026-02-20T08:20:43.842373892Z","level":"info","message":"mcp-injector started","data":{"port":39987}}
+{"timestamp":"2026-02-20T08:20:43.842716223Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:40683"}}
+{"timestamp":"2026-02-20T08:20:43.843421152Z","level":"debug","message":"Received initialize headers","data":{"headers":{"content-length":"140","content-type":"application/json","date":"Fri, 20 Feb 2026 08:20:43 GMT","mcp-session-id":"573ff657-84b8-4889-8786-8e945906fff3","server":"http-kit"}}}
+{"timestamp":"2026-02-20T08:20:43.845206127Z","level":"info","message":"Tool Loop","data":{"iteration":0,"calls":1}}
+{"timestamp":"2026-02-20T08:20:43.846268957Z","level":"info","message":"Tool Loop","data":{"iteration":1,"calls":1}}
+{"timestamp":"2026-02-20T08:20:43.847359749Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:34161"}}
+{"timestamp":"2026-02-20T08:20:43.848212125Z","level":"debug","message":"Received initialize headers","data":{"headers":{"content-length":"140","content-type":"application/json","date":"Fri, 20 Feb 2026 08:20:43 GMT","mcp-session-id":"5647763f-b9a7-4b9f-b008-d4df438f6324","server":"http-kit"}}}
+{"timestamp":"2026-02-20T08:20:43.849667883Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:37503"}}
+{"timestamp":"2026-02-20T08:20:43.850302196Z","level":"debug","message":"Received initialize headers","data":{"headers":{"content-length":"140","content-type":"application/json","date":"Fri, 20 Feb 2026 08:20:43 GMT","mcp-session-id":"fbf07ff4-54fb-4fcf-b5c5-0c7c39b2a05a","server":"http-kit"}}}
+{"timestamp":"2026-02-20T08:20:43.851563521Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:38449"}}
+{"timestamp":"2026-02-20T08:20:43.852196742Z","level":"debug","message":"Received initialize headers","data":{"headers":{"content-length":"140","content-type":"application/json","date":"Fri, 20 Feb 2026 08:20:43 GMT","mcp-session-id":"a00a5987-e0be-4eab-988a-919b04540c3f","server":"http-kit"}}}
+{"timestamp":"2026-02-20T08:20:43.853416662Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:40289"}}
+{"timestamp":"2026-02-20T08:20:43.854126066Z","level":"debug","message":"Received initialize headers","data":{"headers":{"content-length":"140","content-type":"application/json","date":"Fri, 20 Feb 2026 08:20:43 GMT","mcp-session-id":"cbeb5ac2-c602-4b1a-ab7a-38a58a6bf39b","server":"http-kit"}}}
+
+Testing mcp-injector.mcp-session-test
+{"timestamp":"2026-02-20T08:20:43.855932902Z","level":"info","message":"mcp-injector started","data":{"port":41965}}
+{"timestamp":"2026-02-20T08:20:43.856282724Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:41109"}}
+{"timestamp":"2026-02-20T08:20:43.857118626Z","level":"debug","message":"Received initialize headers","data":{"headers":{"content-length":"140","content-type":"application/json","date":"Fri, 20 Feb 2026 08:20:43 GMT","mcp-session-id":"e92ba5b6-3841-4b00-9335-ef5e1ed924ce","server":"http-kit"}}}
+{"timestamp":"2026-02-20T08:20:43.859265712Z","level":"info","message":"Tool Loop","data":{"iteration":0,"calls":1}}
+{"timestamp":"2026-02-20T08:20:43.860048724Z","level":"info","message":"Tool Loop","data":{"iteration":1,"calls":1}}
+
+Testing mcp-injector.virtual-model-test
+{"timestamp":"2026-02-20T08:20:43.862227084Z","level":"info","message":"mcp-injector started","data":{"port":40329}}
+{"timestamp":"2026-02-20T08:20:43.862550153Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3003/mcp"}}
+{"timestamp":"2026-02-20T08:20:43.863410814Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3001/mcp"}}
+{"timestamp":"2026-02-20T08:20:43.865262733Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3003/mcp"}}
+{"timestamp":"2026-02-20T08:20:43.865845785Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3001/mcp"}}
+{"timestamp":"2026-02-20T08:20:43.867362574Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3003/mcp"}}
+{"timestamp":"2026-02-20T08:20:43.867908914Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3001/mcp"}}
+{"timestamp":"2026-02-20T08:20:43.869307886Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3003/mcp"}}
+{"timestamp":"2026-02-20T08:20:43.869786961Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3001/mcp"}}
+{"timestamp":"2026-02-20T08:20:43.870954395Z","level":"warn","message":"LLM Error","data":{"status":429,"body":"{\"error\":{\"message\":\"Rate limit\",\"type\":\"rate_limit_exceeded\",\"param\":null,\"code\":\"rate_limit_exceeded\"}}","translated":{"message":"Rate limit exceeded","status":429,"type":"rate_limit_exceeded","details":{"error":{"message":"Rate limit","type":"rate_limit_exceeded","param":null,"code":"rate_limit_exceeded"}}}}}
+{"timestamp":"2026-02-20T08:20:43.872170566Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3003/mcp"}}
+{"timestamp":"2026-02-20T08:20:43.872867330Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3001/mcp"}}
+{"timestamp":"2026-02-20T08:20:43.874333984Z","level":"warn","message":"LLM Error","data":{"status":429,"body":"{\"error\":{\"message\":\"Rate limited\",\"type\":\"rate_limit_exceeded\",\"param\":null,\"code\":\"rate_limit_exceeded\"}}","translated":{"message":"Rate limit exceeded","status":429,"type":"rate_limit_exceeded","details":{"error":{"message":"Rate limited","type":"rate_limit_exceeded","param":null,"code":"rate_limit_exceeded"}}}}}
+{"timestamp":"2026-02-20T08:20:43.875592698Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3003/mcp"}}
+{"timestamp":"2026-02-20T08:20:43.876452749Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3001/mcp"}}
+{"timestamp":"2026-02-20T08:20:43.878505726Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3003/mcp"}}
+{"timestamp":"2026-02-20T08:20:43.879189422Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3001/mcp"}}
+{"timestamp":"2026-02-20T08:20:43.880569456Z","level":"warn","message":"LLM Error","data":{"status":400,"body":"{\"error\":{\"message\":\"Bad request\",\"type\":\"unknown_error\",\"param\":null,\"code\":null}}","translated":{"message":"Upstream error","status":502,"type":"upstream_error","details":{"error":{"message":"Bad request","type":"unknown_error","param":null,"code":null}}}}}
+{"timestamp":"2026-02-20T08:20:43.881143613Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3003/mcp"}}
+{"timestamp":"2026-02-20T08:20:43.881780116Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3001/mcp"}}
+
+Testing mcp-injector.llm-shim-test
+{"timestamp":"2026-02-20T08:20:43.884716094Z","level":"info","message":"mcp-injector started","data":{"port":37463}}
+{"timestamp":"2026-02-20T08:20:43.885171431Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3003/mcp"}}
+{"timestamp":"2026-02-20T08:20:43.885937400Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3001/mcp"}}
+{"timestamp":"2026-02-20T08:20:43.888876384Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3003/mcp"}}
+{"timestamp":"2026-02-20T08:20:43.889709007Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3001/mcp"}}
+{"timestamp":"2026-02-20T08:20:43.892103246Z","level":"warn","message":"LLM Error","data":{"status":429,"body":"{\"error\":{\"message\":\"Rate limit exceeded\",\"type\":\"rate_limit_exceeded\",\"param\":null,\"code\":\"rate_limit_exceeded\"}}","translated":{"message":"Rate limit exceeded","status":429,"type":"rate_limit_exceeded","details":{"error":{"message":"Rate limit exceeded","type":"rate_limit_exceeded","param":null,"code":"rate_limit_exceeded"}}}}}
+{"timestamp":"2026-02-20T08:20:43.892756018Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3003/mcp"}}
+{"timestamp":"2026-02-20T08:20:43.893421964Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3001/mcp"}}
+{"timestamp":"2026-02-20T08:20:43.895513454Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3003/mcp"}}
+{"timestamp":"2026-02-20T08:20:43.896230749Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3001/mcp"}}
+{"timestamp":"2026-02-20T08:20:43.998644564Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3003/mcp"}}
+{"timestamp":"2026-02-20T08:20:43.999461275Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3001/mcp"}}
+{"timestamp":"2026-02-20T08:20:44.000828473Z","level":"warn","message":"LLM Error","data":{"status":500,"body":"{\"error\":{\"message\":\"Internal server error\",\"type\":\"internal_server_error\",\"param\":null,\"code\":\"internal_server_error\"}}","translated":{"message":"Upstream error","status":502,"type":"upstream_error","details":{"error":{"message":"Internal server error","type":"internal_server_error","param":null,"code":"internal_server_error"}}}}}
+{"timestamp":"2026-02-20T08:20:44.001510512Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3003/mcp"}}
+{"timestamp":"2026-02-20T08:20:44.002145105Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3001/mcp"}}
+{"timestamp":"2026-02-20T08:20:44.004190057Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3003/mcp"}}
+{"timestamp":"2026-02-20T08:20:44.004957063Z","level":"debug","message":"Initializing HTTP MCP session","data":{"url":"http://localhost:3001/mcp"}}
+
+Ran 38 tests containing 128 assertions.
+0 failures, 0 errors.

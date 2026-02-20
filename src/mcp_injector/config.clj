@@ -58,27 +58,28 @@
               (str (:provider fb) "/" (:model fb))))
           fallbacks-config)))
 
-(defn build-tool-directory 
+(defn build-tool-directory
   "Build tool directory from mcp-config. 
    If pre-discovered-tools map provided, use those; otherwise fall back to config :tools list."
   ([mcp-config]
    (build-tool-directory mcp-config nil))
   ([mcp-config pre-discovered-tools]
    (reduce
-     (fn [acc [server-name server-config]]
-       (let [server-url (or (:url server-config) (:uri server-config))
-             tool-names (:tools server-config)]
-         (if server-url
-           (let [tools (if (and pre-discovered-tools (get pre-discovered-tools server-name))
+    (fn [acc [server-name server-config]]
+      (let [server-url (or (:url server-config) (:uri server-config))
+            cmd (:cmd server-config)
+            tool-names (:tools server-config)]
+        (if (or server-url cmd)
+          (let [tools (if (and pre-discovered-tools (get pre-discovered-tools server-name))
                         (get pre-discovered-tools server-name)
                         (map (fn [t] {:name (name t)}) tool-names))]
-             (into acc (map (fn [tool]
-                            {:name (str (name server-name) "." (:name tool))
-                             :server (name server-name)})
-                          tools)))
-           acc)))
-     []
-     (:servers mcp-config))))
+            (into acc (map (fn [tool]
+                             {:name (str (name server-name) "." (:name tool))
+                              :server (name server-name)})
+                           tools)))
+          acc)))
+    []
+    (:servers mcp-config))))
 
 (defn get-meta-tool-definitions
   "Get definitions for meta-tools like get_tool_schema"
@@ -102,27 +103,28 @@
   ([messages mcp-config pre-discovered-tools]
    (let [servers (:servers mcp-config)
          tool-lines (reduce
-                      (fn [lines [server-name server-config]]
-                        (let [server-url (or (:url server-config) (:uri server-config))
-                              tool-names (:tools server-config)]
-                          (if server-url
-                            (let [tools (if (and pre-discovered-tools (get pre-discovered-tools server-name))
-                                         (get pre-discovered-tools server-name)
+                     (fn [lines [server-name server-config]]
+                       (let [server-url (or (:url server-config) (:uri server-config))
+                             cmd (:cmd server-config)
+                             tool-names (:tools server-config)]
+                         (if (or server-url cmd)
+                           (let [tools (if (and pre-discovered-tools (get pre-discovered-tools server-name))
+                                         (map :name (get pre-discovered-tools server-name))
                                          (map name tool-names))
-                                  tool-str (str/join ", " tools)]
-                              (conj lines (str "- mcp__" (name server-name) ": " tool-str)))
-                            lines)))
-                      []
-                      servers)
+                                 tool-str (str/join ", " tools)]
+                             (conj lines (str "- mcp__" (name server-name) ": " tool-str)))
+                           lines)))
+                     []
+                     servers)
          directory-text (str "## Remote Capabilities (Injected)\n"
-                            "You have access to namespaced tools (prefix: mcp__).\n\n"
-                            "### Remote Directory:\n"
-                            (str/join "\n" tool-lines)
-                            "\n\n### CALL PROTOCOL:\n"
-                            "1. IDENTIFY tool in the directory above.\n"
-                            "2. DISCOVER: Call `get_tool_schema(server, tool)` to get parameters.\n"
-                            "3. EXECUTE: Call `mcp__[server]__[tool](...)` with the discovered parameters.\n\n"
-                            "DO NOT guess parameters for mcp__ tools. You MUST discover them first via `get_tool_schema`.")
+                             "You have access to namespaced tools (prefix: mcp__).\n\n"
+                             "### Remote Directory:\n"
+                             (str/join "\n" tool-lines)
+                             "\n\n### CALL PROTOCOL:\n"
+                             "1. IDENTIFY tool in the directory above.\n"
+                             "2. DISCOVER: Call `get_tool_schema(server, tool)` to get parameters.\n"
+                             "3. EXECUTE: Call `mcp__[server]__[tool](...)` with the discovered parameters.\n\n"
+                             "DO NOT guess parameters for mcp__ tools. You MUST discover them first via `get_tool_schema`.")
          system-msg {:role "system" :content directory-text}]
      (cons system-msg messages))))
 
