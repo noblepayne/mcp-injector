@@ -11,3 +11,8 @@ how to handle 502? which might be context issue. how to make sure we communicate
 - [ ] Automatically refresh tool directory from MCP servers at startup or periodically (Phase 3)
 
 - [ ] Support both :url and :uri in server config for better UX/compatibility
+
+
+
+
+- [ ] look into errors string vs number on llm upstream issues? see prism logs

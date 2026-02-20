@@ -145,13 +145,15 @@
                   (:url file)
                   (:llm-url env))
      :mcp-config (:mcp-config env)
-     :max-iterations (or (env-var "MCP_INJECTOR_MAX_ITERATIONS")
-                         (:max-iterations file)
-                         (:max-iterations env))
+     :max-iterations (let [v (or (env-var "MCP_INJECTOR_MAX_ITERATIONS")
+                                 (:max-iterations file))]
+                       (if (string? v) (parse-int v 10) (or v (:max-iterations env))))
      :log-level (or (env-var "MCP_INJECTOR_LOG_LEVEL")
                     (:log-level file)
                     (:log-level env))
-     :timeout-ms (:timeout-ms env)
+     :timeout-ms (let [v (or (env-var "MCP_INJECTOR_TIMEOUT_MS")
+                             (:timeout-ms file))]
+                   (if (string? v) (parse-int v 1800000) (or v (:timeout-ms env))))
      :fallbacks (:fallbacks file)
      :virtual-models (:virtual-models file)}))
 
