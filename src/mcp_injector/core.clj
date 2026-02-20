@@ -264,8 +264,12 @@
         mcp-servers (cond-> mcp-servers
                       (:virtual-models config) (assoc-in [:llm-gateway :virtual-models] (:virtual-models config))
                       (:llm-url config) (assoc-in [:llm-gateway :url] (:llm-url config)))
+        llm-url (config/get-llm-url mcp-servers)
         s (http/run-server (fn [req] (handler req mcp-servers config)) {:port (or port 0) :ip host})]
-    (log-request "info" "mcp-injector started" {:port (:local-port (meta s))})
+    (log-request "info" "mcp-injector started"
+                 {:port (:local-port (meta s))
+                  :llm-gateway llm-url
+                  :mcp-config-path (or mcp-config "default")})
     (reset! server-state s)
     {:port (:local-port (meta s))
      :stop s}))
