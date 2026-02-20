@@ -386,9 +386,9 @@
   "Process tool calls from LLM response.
    Executes MCP tools, passes through non-MCP tools.
    Returns map with :content and :tool-calls (for pass-through)"
-  ([message mcp-servers messages model fallbacks llm-url]
-   (process-tool-calls message mcp-servers messages model fallbacks llm-url 0 (atom #{})))
-  ([message mcp-servers messages model fallbacks llm-url iteration discovered-this-loop]
+  ([message mcp-servers messages active-model fallbacks llm-url]
+   (process-tool-calls message mcp-servers messages active-model fallbacks llm-url 0 (atom #{})))
+  ([message mcp-servers messages active-model fallbacks llm-url iteration discovered-this-loop]
    (let [tool-calls (:tool_calls message)
          content (:content message)]
 
@@ -436,14 +436,14 @@
 
                  ;; Call LLM again
                  follow-up-req (prepare-llm-request
-                                {:model model
+                                {:model active-model
                                  :messages (vec all-messages)}
                                 fallbacks)
                  follow-up-result (call-llm llm-url follow-up-req)]
 
              (if (:success follow-up-result)
                (let [next-message (get-in (:data follow-up-result) [:choices 0 :message])]
-                 (recur next-message mcp-servers all-messages model fallbacks llm-url (inc iteration) discovered-this-loop))
+                 (recur next-message mcp-servers all-messages active-model fallbacks llm-url (inc iteration) discovered-this-loop))
                ;; Error in follow-up call
                {:error (:error follow-up-result)
                 :status (:status follow-up-result 500)}))))))))
@@ -496,7 +496,7 @@
               (log-request "info" "Virtual model succeeded"
                            {:provider provider
                             :remaining (count (rest providers))})
-              result)
+              (assoc result :provider provider))
 
             ;; Retryable error - set cooldown and try next
             (and (:status result) (some #(= % (:status result)) retry-on))
@@ -560,9 +560,10 @@
                        (call-llm llm-url prepared-req))]
       (if (:success llm-result)
         (let [llm-response (:data llm-result)
+              active-model (or (:provider llm-result) model)
               message (get-in llm-response [:choices 0 :message])
               result (process-tool-calls message mcp-servers messages
-                                         model fallbacks llm-url)]
+                                         active-model fallbacks llm-url)]
           (if (:error result)
             (let [error-data (:error result)
                   status (:status result 500)]
