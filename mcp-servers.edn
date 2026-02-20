@@ -1,46 +1,42 @@
-{:servers
- {:stripe
-  {:url "http://localhost:3001/mcp"
-   :tools ["retrieve_customer" "list_charges"]}
-  :postgres
-  {:url "http://localhost:3002/mcp"
-   :tools ["query" "execute"]}
-  :filesystem
-  {:url "http://localhost:3003/mcp"
-   :tools ["read" "write" "ls"]}}
+ {:servers
+  {:auphonic {:url "http://localhost:3003/mcp"
+              :tools ["list_presets" "create_production"]}
+   :stripe   {:url "http://localhost:3001/mcp"
+              :tools ["retrieve_customer" "list_charges"]}}
 
   ;; LLM gateway configuration
- :llm-gateway
- {:url "http://localhost:8080"
+  :llm-gateway
+  {:url "http://prism:8080"
+   :log-level "info" ;; debug|info|warn|error
 
    ;; Fallback chain for legacy mode (injected into requests)
-  :fallbacks [{:provider "zen"
-               :model "kimi-k2.5-free"}
-              {:provider "nvidia"
-               :model "moonshotai/kimi-k2.5"}
-              {:provider "openrouter"
-               :model "moonshotai/kimi-k2.5"}]
+   :fallbacks [{:provider "zen"
+                :model "kimi-k2.5-free"}
+               {:provider "nvidia"
+                :model "moonshotai/kimi-k2.5"}
+               {:provider "openrouter"
+                :model "moonshotai/kimi-k2.5"}]
 
    ;; Virtual models with provider chain and cooldown
-  :virtual-models
-  {:brain
+   :virtual-models
+   {:brain
 
-   {:chain [  ;; Tier 1: Top agentic kings — strongest brains when alive
-            "zen/minimax-m2.5-free"                      ;; Free M2.5 — often #1 for coding agents right now
-            "zen/kimi-k2.5-free"                         ;; Free Kimi K2.5 — multimodal/agent swarm leader
-            "zen/glm-4.7-free"                           ;; Free GLM-4.7 — planning/stability beast
+    {:chain [  ;; Tier 1: Top agentic kings — strongest brains when alive
+             "zen/minimax-m2.5-free"                      ;; Free M2.5 — often #1 for coding agents right now
+             "zen/kimi-k2.5-free"                         ;; Free Kimi K2.5 — multimodal/agent swarm leader
+             "zen/glm-4.7-free"                           ;; Free GLM-4.7 — planning/stability beast
 
   ;; NVIDIA-hosted (dev quotas often generous on these quieter ones)
-            "nvidia/minimaxai/minimax-m2.5"              ;; MiniMax on NVIDIA — fast/reliable
-            "nvidia/moonshotai/kimi-k2.5"                ;; Kimi on NVIDIA — good when not overloaded
-            "nvidia/z-ai/glm5"                           ;; GLM-5 — frontier agentic
-            "nvidia/qwen/qwen3-coder-480b-a35b-instruct" ;; Qwen Coder — repo/tool monster
+             "nvidia/minimaxai/minimax-m2.5"              ;; MiniMax on NVIDIA — fast/reliable
+             "nvidia/moonshotai/kimi-k2.5"                ;; Kimi on NVIDIA — good when not overloaded
+             "nvidia/z-ai/glm5"                           ;; GLM-5 — frontier agentic
+             "nvidia/qwen/qwen3-coder-480b-a35b-instruct" ;; Qwen Coder — repo/tool monster
 
   ;; Last-resort paid fallbacks via OpenRouter
-            "openrouter/minimax/minimax-m2.5"
-            "openrouter/moonshotai/kimi-k2.5"
-            "openrouter/z-ai/glm5"
-            "openrouter/qwen/qwen3-coder-480b-a35b-instruct"]
+             "openrouter/minimax/minimax-m2.5"
+             "openrouter/moonshotai/kimi-k2.5"
+             "openrouter/z-ai/glm5"
+             "openrouter/qwen/qwen3-coder-480b-a35b-instruct"]
      :cooldown-minutes 5
      ;; Don't include 503 (context overflow) in retry-on
      ;; Same model has same context window, so advancing the chain wastes quota
