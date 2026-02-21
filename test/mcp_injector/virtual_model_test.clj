@@ -20,7 +20,7 @@
                       {:port 0
                        :host "127.0.0.1"
                        :llm-url (str "http://localhost:" (:port llm))
-                       :mcp-config "./mcp-servers.edn"
+                       :mcp-servers {:servers {}}
                        :virtual-models {"brain"
                                         {:chain ["provider1/model1"
                                                  "provider2/model2"]

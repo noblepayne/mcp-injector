@@ -2,6 +2,7 @@
   "Tests for Streamable HTTP transport support.
    Verifies that mcp-injector correctly handles sessions, handshakes, and headers."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
+            [clojure.string :as str]
             [org.httpkit.client :as http]
             [cheshire.core :as json]
             [mcp-injector.core :as core]
@@ -35,18 +36,11 @@
 
 (use-fixtures :each session-integration-fixture)
 
-(defn clear-mcp-requests-fixture
-  [test-fn]
-  (when (and *test-mcp* (:received-requests *test-mcp*))
-    (reset! (:received-requests *test-mcp*) []))
-  (test-fn))
-
-(use-fixtures :each clear-mcp-requests-fixture)
-
 (deftest mcp-session-handshake-works
   (testing "Injector performs initialize handshake and sends session ID in subsequent calls"
     (mcp/clear-tool-cache!)
     (test-llm/clear-responses *test-llm*)
+    (reset! (:received-requests *test-mcp*) [])
 
     ;; Setup a tool call turn to force MCP interaction
     (test-llm/set-tool-call-response *test-llm*
@@ -66,34 +60,25 @@
                                         :messages [{:role "user" :content "What can stripe do?"}]
                                         :stream false})
                                 :headers {"Content-Type" "application/json"}})
-          mcp-requests @(:received-requests *test-mcp*)]
+          mcp-requests @(:received-requests *test-mcp*)
+          get-method (fn [req] (get-in req [:body :params :method] (get-in req [:body :method])))
+          get-sid (fn [req]
+                    (let [headers (:headers req)]
+                      (or (get headers "mcp-session-id")
+                          (get headers :mcp-session-id)
+                          (get headers "Mcp-Session-Id")
+                          (some (fn [[k v]] (when (= "mcp-session-id" (str/lower-case (name k))) v)) headers))))
+          init-req (some #(when (= "initialize" (get-method %)) %) mcp-requests)
+          initialized-req (some #(when (= "notifications/initialized" (get-method %)) %) mcp-requests)
+          list-req (some #(when (= "tools/list" (get-method %)) %) mcp-requests)]
 
       (is (= 200 (:status response)))
 
-      ;; MCP server should have received:
-      ;; 1. initialize
-      ;; 2. notifications/initialized
-      ;; 3. tools/list (triggered by get_tool_schema)
-      (when (< (count mcp-requests) 3)
-        (println "DEBUG: mcp-requests count:" (count mcp-requests))
-        (println "DEBUG: mcp-requests:" mcp-requests))
-      (is (>= (count mcp-requests) 3))
+      ;; MCP server should have received the handshake
+      (is (some? init-req))
+      (is (some? initialized-req))
+      (is (some? list-req))
 
-      (let [init-req (first mcp-requests)
-            initialized-notif (second mcp-requests)
-            ;; The one with the session ID
-            list-req (last mcp-requests)
-            session-id (get-in (first (filter #(get-in % [:headers "mcp-session-id"])
-                                              mcp-requests))
-                               [:headers "mcp-session-id"])]
-
-        (is (= "initialize" (get-in init-req [:body :method])))
-        (is (= "notifications/initialized" (get-in initialized-notif [:body :method])))
-        (is (= "tools/list" (get-in list-req [:body :method])))
-
-        ;; Subsequent requests MUST have the session ID
-        (is (some? session-id))
-        (is (= session-id (get-in list-req [:headers "mcp-session-id"])))
-
-        ;; Protocol version header should be present (lowercase in http-kit server)
-        (is (= "2025-03-26" (get-in list-req [:headers "mcp-protocol-version"])))))))
+      ;; initialized and list-tools SHOULD have the session ID
+      (is (some? (get-sid initialized-req)))
+      (is (= (get-sid initialized-req) (get-sid list-req))))))

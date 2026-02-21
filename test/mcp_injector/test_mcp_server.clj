@@ -49,11 +49,18 @@
                      {:status 200
                       :body {:jsonrpc "2.0"
                              :id (:id body)
-                             :result {:tools (->> @(:tools @server-state)
-                                                  (map (fn [[name schema]]
-                                                         {:name name
-                                                          :description (:description schema)
-                                                          :inputSchema (:schema schema)})))}}}
+                             :result {:tools (let [tools @(:tools @server-state)]
+                                               (if (map? tools)
+                                                 (map (fn [[name schema]]
+                                                        {:name (clojure.core/name name)
+                                                         :description (:description schema)
+                                                         :inputSchema (:schema schema)})
+                                                      tools)
+                                                 (map (fn [tool]
+                                                        {:name (:name tool)
+                                                         :description (:description tool)
+                                                         :inputSchema (:inputSchema tool)})
+                                                      tools)))}}}
 
                      "tools/call"
                      (let [tool-name (get-in body [:params :name])

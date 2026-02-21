@@ -121,7 +121,7 @@ mcp-injector provides a unified JSON API for observability and state management:
 - `POST /api/v1/mcp/reset`: Force clear caches and restart local processes.
 - `GET /api/v1/llm/state`: Inspect provider cooldowns and total usage.
 - `POST /api/v1/llm/cooldowns/reset`: Clear all provider cooldowns.
-- `GET /api/v1/stats`: Legacy/Detailed usage telemetry.
+- `GET /stats` / `/api/v1/stats`: Usage telemetry.
 
 ## Architecture
 
@@ -218,7 +218,7 @@ See `AGENTS.md` for detailed guidelines.
 - ✅ MCP tool directory injection
 - ✅ Agent loop with tool execution
 - ✅ SSE streaming
-- ✅ Real HTTP integration tests (42 tests, 140 assertions)
+- ✅ Real HTTP integration tests (37 tests, 121 assertions)
 
 **Future:**
 
@@ -236,4 +236,4 @@ See `AGENTS.md` for development guidelines and `dev/` for project tracking.
 
 ______________________________________________________________________
 
-**Status**: Production-ready | **Tests**: 42 passing, 140 assertions | **Built with**: Babashka + http-kit + Cheshire
+**Status**: Production-ready | **Tests**: 37 passing, 121 assertions | **Built with**: Babashka + http-kit + Cheshire
