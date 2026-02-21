@@ -8,7 +8,7 @@
 (def ^:private http-sessions (atom {})) ;; url -> session-id
 (def ^:private tool-cache (atom {})) ;; server-id -> [tools]
 
-(def ^:const PROTOCOL_VERSION "2025-03-26")
+(def ^:const PROTOCOL_VERSION "2025-06-18")
 
 (def http-client (http/client {:version :http1.1}))
 
@@ -71,7 +71,7 @@
           resp (http/post server-url
                           {:headers {"Mcp-Session-Id" sid
                                      "Content-Type" "application/json"
-                                     "Accept" "application/json"
+                                     "Accept" "application/json, text/event-stream"
                                      "MCP-Protocol-Version" PROTOCOL_VERSION}
                            :body (json/generate-string
                                   {:jsonrpc "2.0"
