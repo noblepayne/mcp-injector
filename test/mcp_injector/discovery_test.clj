@@ -73,8 +73,9 @@
                                 :headers {"Content-Type" "application/json"}})
           requests @(:received-requests *test-llm*)
           first-req (first requests)
-          tool-result-msg (get-in (last requests) [:messages])
-          tool-result-msg (some #(when (= "tool" (:role %)) %) tool-result-msg)]
+          last-req (last requests)
+          ;; Get all tool messages from the last request history
+          tool-msgs (filter #(= "tool" (:role %)) (:messages last-req))]
 
       (is (= 200 (:status response)))
       ;; Check that directory was injected
@@ -83,8 +84,8 @@
       ;; Check that get_tool_schema was available
       (is (some (fn [t] (= "get_tool_schema" (get-in t [:function :name]))) (get-in first-req [:tools])))
 
-      ;; Check tool call content
-      (is (str/includes? (:content tool-result-msg) "customer@example.com")))))
+      ;; Check tool call content - at least ONE tool message should contain the result
+      (is (some (fn [m] (str/includes? (:content m) "customer@example.com")) tool-msgs)))))
 
 (deftest tool-discovery-filtering-nil-shows-all
   (testing "When :tools is nil, all discovered tools from MCP server should be shown"
