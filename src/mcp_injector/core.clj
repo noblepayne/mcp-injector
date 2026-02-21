@@ -19,9 +19,12 @@
              :data data})))
 
 (defn- parse-body [body]
-  (if (string? body)
-    (json/parse-string body true)
-    (json/parse-string (slurp body) true)))
+  (try
+    (if (string? body)
+      (json/parse-string body true)
+      (json/parse-string (slurp body) true))
+    (catch Exception e
+      (throw (ex-info "Failed to parse JSON body" {:type :json-parse-error} e)))))
 
 (defn- is-context-overflow-error? [error-str]
   (when (string? error-str)
@@ -99,94 +102,88 @@
           t-name (:tool args)
           s-config (get-in mcp-servers [:servers (keyword s-name)])]
       (if s-config
-        (let [result (mcp/get-tool-schema s-name s-config t-name)]
-          (if (:error result)
-            result
-            (do (swap! discovered-this-loop assoc (str "mcp__" s-name "__" t-name) result)
-                result)))
+        (let [schema (mcp/get-tool-schema (name s-name) s-config t-name)]
+          (if (:error schema)
+            {:error (:error schema)}
+            schema))
         {:error (str "Server not found: " s-name)}))
 
-    (str/starts-with? full-name "mcp__")
-    (if (contains? @discovered-this-loop full-name)
-      (let [[_ s-name t-name] (str/split full-name #"__" 3)
-            s-config (get-in mcp-servers [:servers (keyword s-name)])]
-        (if s-config
-          (mcp/call-tool s-name s-config t-name args)
-          {:error (str "MCP server not found: " s-name)}))
-      {:error (str "Protocol Violation: Call get_tool_schema first for " full-name)})
+    :else
+    (let [[s-name t-name] (if (str/includes? full-name "__")
+                            (str/split full-name #"__" 2)
+                            [nil full-name])
+          s-config (when s-name (get-in mcp-servers [:servers (keyword s-name)]))]
+      (if (and s-name s-config)
+        (mcp/call-tool (name s-name) s-config t-name args)
+        (let [server-id (some (fn [[s-id tools]]
+                                (when (some #(= t-name (:name %)) tools) s-id))
+                              discovered-this-loop)
+              s-conf (when server-id (get-in mcp-servers [:servers (keyword server-id)]))]
+          (if (and server-id s-conf)
+            (mcp/call-tool (name server-id) s-conf t-name args)
+            {:error (str "Tool not found or server not configured: " full-name)}))))))
 
-    :else {:error (str "Unknown tool: " full-name)}))
-
-(defn- agent-loop [llm-url prepared-req mcp-servers max-iterations]
-  (let [discovered-this-loop (atom {})]
-    (loop [iteration 0
-           current-req prepared-req
-           last-resp nil]
-      (let [llm-result (call-llm llm-url current-req)]
-        (if-not (:success llm-result)
-          (if (and last-resp (>= iteration (or max-iterations 10)))
-            {:success true :data last-resp}
-            llm-result)
-          (let [llm-response (:data llm-result)
-                message (get-in llm-response [:choices 0 :message])
+(defn- agent-loop [llm-url payload mcp-servers max-iterations]
+  (loop [current-payload payload
+         iteration 0]
+    (if (>= iteration max-iterations)
+      {:success false :error "Max iterations reached"}
+      (let [_ (log-request "info" "Tool Loop" {:iteration iteration :calls (count (get-in current-payload [:messages]))})
+            resp (call-llm llm-url current-payload)]
+        (if-not (:success resp)
+          resp
+          (let [choices (get-in resp [:data :choices])
+                message (get-in (first choices) [:message])
                 tool-calls (:tool_calls message)]
-            (if (or (empty? tool-calls) (>= iteration (or max-iterations 10)))
-              {:success true :data llm-response}
-              (let [mcp-calls (filter #(or (= (get-in % [:function :name]) "get_tool_schema")
-                                           (str/starts-with? (get-in % [:function :name]) "mcp__"))
-                                      tool-calls)]
-                (if (empty? mcp-calls)
-                  {:success true :data llm-response}
-                  (let [results (mapv (fn [tc]
-                                        (let [fname (get-in tc [:function :name])
-                                              args (json/parse-string (get-in tc [:function :arguments]) true)
-                                              res (execute-tool fname args mcp-servers discovered-this-loop)]
-                                          {:role "tool" :tool_call_id (:id tc) :name fname :content (json/generate-string res)}))
-                                      mcp-calls)
-                        new-tools (into (vec (config/get-meta-tool-definitions))
-                                        (concat (:tools prepared-req)
-                                                (map (fn [[fname tool]]
-                                                       {:type "function"
-                                                        :function {:name fname
-                                                                   :description (:description tool)
-                                                                   :parameters (:inputSchema tool)}})
-                                                     @discovered-this-loop)))
-                        next-req (assoc current-req
-                                        :messages (vec (concat (:messages current-req) [message] results))
-                                        :tools (vec new-tools))]
-                    (log-request "info" "Tool Loop" {:iteration iteration :calls (count mcp-calls)})
-                    (recur (inc iteration) next-req llm-response)))))))))))
+            (if-not tool-calls
+              resp
+              (let [discovered (reduce (fn [acc [s-id s-conf]]
+                                         (assoc acc (name s-id) (mcp/discover-tools (name s-id) s-conf (:tools s-conf))))
+                                       {} (:servers mcp-servers))
+                    results (mapv (fn [tc]
+                                    (let [fn-name (get-in tc [:function :name])
+                                          args-str (get-in tc [:function :arguments])
+                                          args (try (json/parse-string args-str true) (catch Exception _ args-str))
+                                          result (execute-tool fn-name args mcp-servers discovered)]
+                                      {:role "tool"
+                                       :tool_call_id (:id tc)
+                                       :name fn-name
+                                       :content (if (string? result) result (json/generate-string result))}))
+                                  tool-calls)
+                    new-messages (conj (vec (:messages current-payload))
+                                       message)
+                    new-messages (into new-messages results)]
+                (recur (assoc current-payload :messages new-messages) (inc iteration))))))))))
 
-(defn- prepare-llm-request [openai-request mcp-servers]
-  (let [meta-tools (config/get-meta-tool-definitions)
-        existing-tools (:tools openai-request)
-        fallbacks (config/get-llm-fallbacks mcp-servers)
-        merged-tools (concat (or existing-tools [])
-                             meta-tools)]
-    (-> openai-request
-        (assoc :stream false)
-        (dissoc :stream_options)
-        (assoc :fallbacks fallbacks)
-        (assoc :tools (vec (distinct merged-tools))))))
+(defn- set-cooldown! [provider minutes]
+  (swap! cooldown-state assoc provider (+ (System/currentTimeMillis) (* minutes 60 1000))))
 
-(defn set-cooldown! [provider minutes]
-  (swap! cooldown-state assoc provider
-         (+ (System/currentTimeMillis) (* minutes 60 1000))))
-
-(defn in-cooldown? [provider]
-  (when-let [cooldown-end (get @cooldown-state provider)]
-    (> cooldown-end (System/currentTimeMillis))))
+(defn- is-on-cooldown? [provider]
+  (if-let [expiry (get @cooldown-state provider)]
+    (if (> expiry (System/currentTimeMillis))
+      true
+      (do (swap! cooldown-state dissoc provider) false))
+    false))
 
 (defn reset-cooldowns! []
   (reset! cooldown-state {}))
 
-(defn- try-virtual-model-chain
-  [virtual-config prepared-req llm-url mcp-servers max-iterations]
-  (let [chain (:chain virtual-config)
-        cooldown-mins (get virtual-config :cooldown-minutes 5)
-        retry-on (get virtual-config :retry-on [429 500])
-        available (remove in-cooldown? chain)]
-    (loop [providers available
+(defn- prepare-llm-request [chat-req _mcp-servers]
+  (-> chat-req
+      (dissoc :stream)
+      (update :messages (fn [msgs]
+                          (mapv (fn [m]
+                                  (if (and (= (:role m) "assistant") (:tool_calls m))
+                                    (update m :tool_calls (fn [tcs]
+                                                            (mapv #(dissoc % :index) tcs)))
+                                    m))
+                                msgs)))))
+
+(defn- try-virtual-model-chain [config prepared-req llm-url mcp-servers max-iterations]
+  (let [chain (:chain config)
+        retry-on (set (:retry-on config [429 500]))
+        cooldown-mins (get config :cooldown-minutes 5)]
+    (loop [providers (filter #(not (is-on-cooldown? %)) chain)
            last-error nil]
       (if (empty? providers)
         {:success false :status 502 :error (or last-error {:message "All providers failed"})}
@@ -203,48 +200,56 @@
               result)))))))
 
 (defn- handle-chat-completion [request mcp-servers config]
-  (let [chat-req (parse-body (:body request))
-        model (:model chat-req)
-        _ (log-request "info" "Chat Completion Started" {:model model :stream (:stream chat-req)})
-        discovered (reduce (fn [acc [s-name s-conf]]
-                             (let [url (or (:url s-conf) (:uri s-conf))
-                                   cmd (:cmd s-conf)]
-                               (if (or url cmd)
-                                 (try (assoc acc s-name (mcp/discover-tools (name s-name) s-conf (:tools s-conf)))
-                                      (catch Exception e
-                                        (log-request "warn" "Discovery failed" {:server s-name :error (.getMessage e)})
-                                        acc))
-                                 acc)))
-                           {} (:servers mcp-servers))
-        messages (config/inject-tools-into-messages (:messages chat-req) mcp-servers discovered)
-        llm-url (or (:llm-url config) (config/get-llm-url mcp-servers))
-        virtual-models (config/get-virtual-models mcp-servers)
-        virtual-config (or (get virtual-models model) (get virtual-models (keyword model)))
-        prepared-req (prepare-llm-request (assoc chat-req :messages messages) mcp-servers)
-        max-iter (or (:max-iterations config) 10)
-        result (if virtual-config
-                 (try-virtual-model-chain virtual-config prepared-req llm-url mcp-servers max-iter)
-                 (agent-loop llm-url prepared-req mcp-servers max-iter))]
-    (if (:success result)
-      (let [final-resp (:data result)
-            _ (track-usage! model (:usage final-resp))
-            _ (log-request "info" "Chat Completion Success" {:model model :usage (:usage final-resp)})
-            body (if (:stream chat-req)
-                   (openai/build-chat-response-streaming
-                    {:content (get-in final-resp [:choices 0 :message :content])
-                     :tool-calls (get-in final-resp [:choices 0 :message :tool_calls])
-                     :model model
-                     :usage (:usage final-resp)})
-                   (json/generate-string (assoc final-resp :model model)))]
-        {:status 200 :headers {"Content-Type" (if (:stream chat-req) "text/event-stream" "application/json")} :body body})
-      (let [status (or (:status result) 500)
-            error-data (:error result)
-            error-msg (if (map? error-data) (:message error-data) (str "Failed: " error-data))
-            error-type (get-in result [:error :type] "internal_error")
-            body (if (:stream chat-req)
-                   (str "data: " (json/generate-string {:error {:message error-msg :type error-type :details (get-in result [:error :details])}}) "\n\ndata: [DONE]\n\n")
-                   (json/generate-string {:error {:message error-msg :type error-type :details (get-in result [:error :details])}}))]
-        {:status status :headers {"Content-Type" (if (:stream chat-req) "text/event-stream" "application/json")} :body body}))))
+  (try
+    (let [chat-req (parse-body (:body request))
+          model (:model chat-req)
+          _ (log-request "info" "Chat Completion Started" {:model model :stream (:stream chat-req)})
+          discovered (reduce (fn [acc [s-name s-conf]]
+                               (let [url (or (:url s-conf) (:uri s-conf))
+                                     cmd (:cmd s-conf)]
+                                 (if (or url cmd)
+                                   (try (assoc acc s-name (mcp/discover-tools (name s-name) s-conf (:tools s-conf)))
+                                        (catch Exception e
+                                          (log-request "warn" "Discovery failed" {:server s-name :error (.getMessage e)})
+                                          acc))
+                                   acc)))
+                             {} (:servers mcp-servers))
+          messages (config/inject-tools-into-messages (:messages chat-req) mcp-servers discovered)
+          llm-url (or (:llm-url config) (config/get-llm-url mcp-servers))
+          virtual-models (config/get-virtual-models mcp-servers)
+          virtual-config (or (get virtual-models model) (get virtual-models (keyword model)))
+          prepared-req (prepare-llm-request (assoc chat-req :messages messages) mcp-servers)
+          max-iter (or (:max-iterations config) 10)
+          result (if virtual-config
+                   (try-virtual-model-chain virtual-config prepared-req llm-url mcp-servers max-iter)
+                   (agent-loop llm-url prepared-req mcp-servers max-iter))]
+      (if (:success result)
+        (let [final-resp (:data result)
+              _ (track-usage! model (:usage final-resp))
+              _ (log-request "info" "Chat Completion Success" {:model model :usage (:usage final-resp)})
+              body (if (:stream chat-req)
+                     (openai/build-chat-response-streaming
+                      {:content (get-in final-resp [:choices 0 :message :content])
+                       :tool-calls (get-in final-resp [:choices 0 :message :tool_calls])
+                       :model model
+                       :usage (:usage final-resp)})
+                     (json/generate-string (assoc final-resp :model model)))]
+          {:status 200 :headers {"Content-Type" (if (:stream chat-req) "text/event-stream" "application/json")} :body body})
+        (let [status (or (:status result) 500)
+              error-data (:error result)
+              error-msg (if (map? error-data) (:message error-data) (str "Failed: " error-data))
+              error-type (get-in result [:error :type] "internal_error")
+              body (if (:stream chat-req)
+                     (str "data: " (json/generate-string {:error {:message error-msg :type error-type :details (get-in result [:error :details])}}) "\n\ndata: [DONE]\n\n")
+                     (json/generate-string {:error {:message error-msg :type error-type :details (get-in result [:error :details])}}))]
+          {:status status :headers {"Content-Type" (if (:stream chat-req) "text/event-stream" "application/json")} :body body})))
+    (catch Exception e
+      (let [err-type (or (some-> e ex-data :type name) "internal_error")]
+        (log-request "error" "Chat completion failed" {:type err-type :message (.getMessage e)})
+        {:status 400
+         :headers {"Content-Type" "application/json"}
+         :body (json/generate-string {:error {:message (or (.getMessage e) "Internal server error")
+                                              :type err-type}})}))))
 
 (defn get-gateway-state []
   {:cooldowns @cooldown-state
@@ -288,34 +293,44 @@
       (= uri "/health")
       {:status 200 :headers {"Content-Type" "application/json"} :body (json/generate-string {:status "ok"})}
 
-      (= uri "/stats")
-      {:status 200 :headers {"Content-Type" "application/json"} :body (json/generate-string {:stats @usage-stats})}
-
-      (str/starts-with? uri "/api/v1/")
-      (let [resp (handle-api request mcp-servers config)]
-        (assoc-in resp [:headers "Content-Type"] "application/json"))
+      (str/starts-with? uri "/api/v1")
+      (handle-api request mcp-servers config)
 
       :else
       {:status 404 :body "Not found"})))
 
-(defn start-server [{:keys [port host mcp-config] :as config}]
-  (let [mcp-servers (or (:mcp-servers config) (config/load-mcp-servers mcp-config))
-        mcp-servers (cond-> mcp-servers
-                      (:virtual-models config) (assoc-in [:llm-gateway :virtual-models] (:virtual-models config))
-                      (:llm-url config) (assoc-in [:llm-gateway :url] (:llm-url config)))
-        llm-url (config/get-llm-url mcp-servers)
-        s (http/run-server (fn [req] (handler req mcp-servers config)) {:port (or port 0) :ip host})
-        warmup (future (mcp/warm-up! mcp-servers))]
-    (log-request "info" "mcp-injector started"
-                 {:port (:local-port (meta s))
-                  :host host
-                  :llm-gateway llm-url
-                  :mcp-config-path (or mcp-config "default")
-                  :log-level (:log-level config)
-                  :max-iterations (:max-iterations config)})
-    (reset! server-state {:server s :warmup-future warmup})
-    {:port (:local-port (meta s))
-     :stop s}))
+(defn start-server [mcp-config]
+  (let [initial-config (if (and (map? mcp-config) (not (:servers mcp-config)))
+                         mcp-config
+                         {})
+        port (or (:port initial-config)
+                 (some-> (System/getenv "MCP_INJECTOR_PORT") not-empty Integer/parseInt)
+                 8080)
+        host (or (:host initial-config)
+                 (System/getenv "MCP_INJECTOR_HOST")
+                 "127.0.0.1")
+        llm-url (or (:llm-url initial-config)
+                    (System/getenv "MCP_INJECTOR_LLM_URL")
+                    "http://localhost:11434")
+        log-level (or (:log-level initial-config)
+                      (System/getenv "MCP_INJECTOR_LOG_LEVEL"))
+        max-iterations (or (:max-iterations initial-config)
+                           (some-> (System/getenv "MCP_INJECTOR_MAX_ITERATIONS") not-empty Integer/parseInt)
+                           10)
+        mcp-config-path (or (:mcp-config-path initial-config)
+                            (System/getenv "MCP_INJECTOR_MCP_CONFIG")
+                            "mcp-servers.edn")
+        mcp-servers (cond
+                      (and (map? mcp-config) (:servers mcp-config)) mcp-config
+                      (:mcp-servers initial-config) (:mcp-servers initial-config)
+                      :else (config/load-mcp-servers mcp-config-path))
+        final-config {:port port :host host :llm-url llm-url :log-level log-level :max-iterations max-iterations :mcp-config-path mcp-config-path}
+        srv (http/run-server (fn [req] (handler req mcp-servers final-config)) {:port port :host host})
+        actual-port (or (:local-port (meta srv)) port)
+        warmup-fut (future (mcp/warm-up! mcp-servers))]
+    (reset! server-state {:server srv :port actual-port :warmup-future warmup-fut})
+    (log-request "info" "mcp-injector started" (assoc final-config :port actual-port))
+    {:server srv :port actual-port :warmup-future warmup-fut}))
 
 (defn stop-server [s]
   (when s

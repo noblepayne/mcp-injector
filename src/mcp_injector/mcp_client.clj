@@ -27,7 +27,7 @@
           init-resp (http/post server-url
                                {:body (json/generate-string init-body)
                                 :headers {"Content-Type" "application/json"
-                                          "Accept" "application/json"
+                                          "Accept" "application/json, text/event-stream"
                                           "MCP-Protocol-Version" PROTOCOL_VERSION}})
           status (:status init-resp)]
       (if (= 200 status)

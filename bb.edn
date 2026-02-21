@@ -11,11 +11,13 @@
                 (require 'mcp-injector.mcp-session-test)
                 (require 'mcp-injector.virtual-model-test)
                 (require 'mcp-injector.llm-shim-test)
+                (require 'mcp-injector.mcp-client-headers-test)
                 (let [{:keys [fail error]} (t/run-tests 'mcp-injector.integration-test
                                                         'mcp-injector.discovery-test
                                                         'mcp-injector.mcp-session-test
                                                         'mcp-injector.virtual-model-test
-                                                        'mcp-injector.llm-shim-test)]
+                                                        'mcp-injector.llm-shim-test
+                                                        'mcp-injector.mcp-client-headers-test)]
                   (when (pos? (+ fail error))
                     (System/exit 1))))}
 
