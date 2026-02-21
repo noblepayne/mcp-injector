@@ -158,12 +158,24 @@
                     (let [results (mapv (fn [tc]
                                           (let [fn-name (get-in tc [:function :name])
                                                 args-str (get-in tc [:function :arguments])
-                                                args (try (json/parse-string args-str true) (catch Exception _ {}))
-                                                result (execute-tool fn-name args mcp-servers discovered-this-loop)]
-                                            {:role "tool"
-                                             :tool_call_id (:id tc)
-                                             :name fn-name
-                                             :content (if (string? result) result (json/generate-string result))}))
+                                                parse-result (try
+                                                               {:success true :args (json/parse-string args-str true)}
+                                                               (catch Exception e
+                                                                 {:success false :error (.getMessage e)}))]
+                                            (if (:success parse-result)
+                                              (let [result (execute-tool fn-name (:args parse-result) mcp-servers discovered-this-loop)]
+                                                {:role "tool"
+                                                 :tool_call_id (:id tc)
+                                                 :name fn-name
+                                                 :content (if (string? result) result (json/generate-string result))})
+                                               ;; JSON parse error - return error to LLM as tool result
+                                              {:role "tool"
+                                               :tool_call_id (:id tc)
+                                               :name fn-name
+                                               :content (json/generate-string
+                                                         {:error "Malformed tool arguments JSON"
+                                                          :details {:args-str args-str
+                                                                    :parse-error (:error parse-result)}})})))
                                         mcp-calls)
                           newly-discovered @discovered-this-loop
                           new-tools (vec (concat (config/get-meta-tool-definitions)
