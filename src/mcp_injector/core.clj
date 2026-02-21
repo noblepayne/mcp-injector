@@ -104,8 +104,10 @@
       (if s-config
         (let [schema (mcp/get-tool-schema (name s-name) s-config t-name)]
           (if (:error schema)
-            {:error (:error schema)}
-            schema))
+            schema
+            (let [mcp-name (str "mcp__" s-name "__" t-name)]
+              (swap! discovered-this-loop assoc mcp-name schema)
+              schema)))
         {:error (str "Server not found: " s-name)}))
 
     (str/starts-with? full-name "mcp__")
@@ -117,59 +119,63 @@
           s-config (when s-name (get-in mcp-servers [:servers (keyword s-name)]))]
       (if (and s-name s-config)
         (mcp/call-tool (name s-name) s-config real-t-name args)
-        (let [server-id (some (fn [[s-id tools]]
-                                (when (some #(= real-t-name (:name %)) tools) s-id))
-                              discovered-this-loop)
-              s-conf (when server-id (get-in mcp-servers [:servers (keyword server-id)]))]
-          (if (and server-id s-conf)
-            (mcp/call-tool (name server-id) s-conf real-t-name args)
-            {:error (str "Tool not found or server not configured for: " full-name)}))))
+        (if-let [schema (get @discovered-this-loop full-name)]
+          (let [[_ s-name-auto real-t-auto] (str/split full-name #"__" 3)
+                s-conf-auto (get-in mcp-servers [:servers (keyword s-name-auto)])]
+            (mcp/call-tool (name s-name-auto) s-conf-auto real-t-auto args))
+          {:error (str "Protocol Violation: Parameters for '" full-name "' are unknown. You MUST call 'get_tool_schema' first to discover them.")})))
 
-    :else
-    (let [server-id (some (fn [[s-id tools]]
-                            (when (some #(= full-name (:name %)) tools) s-id))
-                          discovered-this-loop)
-          s-conf (when server-id (get-in mcp-servers [:servers (keyword server-id)]))]
-      (if (and server-id s-conf)
-        (mcp/call-tool (name server-id) s-conf full-name args)
-        {:error (str "Tool not found or server not configured: " full-name)}))))
+    :else {:error (str "Unknown tool: " full-name)}))
 
 (defn- agent-loop [llm-url payload mcp-servers max-iterations]
-  (loop [current-payload payload
-         iteration 0]
-    (if (>= iteration max-iterations)
-      {:success false :error "Max iterations reached"}
-      (let [_ (log-request "info" "Tool Loop" {:iteration iteration :calls (count (get-in current-payload [:messages]))})
-            resp (call-llm llm-url current-payload)]
-        (if-not (:success resp)
-          resp
-          (let [choices (get-in resp [:data :choices])
-                message (get-in (first choices) [:message])
-                tool-calls (:tool_calls message)]
-            (if-not tool-calls
-              resp
-              (let [mcp-calls (filter #(or (= (get-in % [:function :name]) "get_tool_schema")
-                                           (str/starts-with? (get-in % [:function :name]) "mcp__"))
-                                      tool-calls)]
-                (if (empty? mcp-calls)
-                  resp
-                  (let [discovered (reduce (fn [acc [s-id s-conf]]
-                                             (assoc acc (name s-id) (mcp/discover-tools (name s-id) s-conf (:tools s-conf))))
-                                           {} (:servers mcp-servers))
-                        results (mapv (fn [tc]
-                                        (let [fn-name (get-in tc [:function :name])
-                                              args-str (get-in tc [:function :arguments])
-                                              args (try (json/parse-string args-str true) (catch Exception _ args-str))
-                                              result (execute-tool fn-name args mcp-servers discovered)]
-                                          {:role "tool"
-                                           :tool_call_id (:id tc)
-                                           :name fn-name
-                                           :content (if (string? result) result (json/generate-string result))}))
-                                      mcp-calls)
-                        new-messages (conj (vec (:messages current-payload))
-                                           message)
-                        new-messages (into new-messages results)]
-                    (recur (assoc current-payload :messages new-messages) (inc iteration))))))))))))
+  (let [discovered-this-loop (atom {})]
+    (loop [current-payload payload
+           iteration 0]
+      (if (>= iteration max-iterations)
+        {:success true
+         :data {:choices [{:index 0
+                           :message {:role "assistant"
+                                     :content "Maximum iterations reached. Here's what I found so far:"
+                                     :tool_calls nil}
+                           :finish_reason "length"}]}}
+        (let [_ (log-request "info" "Tool Loop" {:iteration iteration :calls (count (get-in current-payload [:messages]))})
+              resp (call-llm llm-url current-payload)]
+          (if-not (:success resp)
+            resp
+            (let [choices (get-in resp [:data :choices])
+                  message (get-in (first choices) [:message])
+                  tool-calls (:tool_calls message)]
+              (if-not tool-calls
+                resp
+                (let [mcp-calls (filter #(or (= (get-in % [:function :name]) "get_tool_schema")
+                                             (str/starts-with? (get-in % [:function :name]) "mcp__"))
+                                        tool-calls)
+                      native-calls (filter #(not (or (= (get-in % [:function :name]) "get_tool_schema")
+                                                     (str/starts-with? (get-in % [:function :name]) "mcp__")))
+                                           tool-calls)]
+                  (if (or (empty? mcp-calls) (seq native-calls))
+                    resp
+                    (let [results (mapv (fn [tc]
+                                          (let [fn-name (get-in tc [:function :name])
+                                                args-str (get-in tc [:function :arguments])
+                                                args (try (json/parse-string args-str true) (catch Exception _ args-str))
+                                                result (execute-tool fn-name args mcp-servers discovered-this-loop)]
+                                            {:role "tool"
+                                             :tool_call_id (:id tc)
+                                             :name fn-name
+                                             :content (if (string? result) result (json/generate-string result))}))
+                                        mcp-calls)
+                          newly-discovered @discovered-this-loop
+                          new-tools (vec (concat (config/get-meta-tool-definitions)
+                                                 (map (fn [[name schema]]
+                                                        {:type "function"
+                                                         :function {:name name
+                                                                    :description (:description schema)
+                                                                    :parameters (:inputSchema schema)}})
+                                                      newly-discovered)))
+                          new-messages (conj (vec (:messages current-payload)) message)
+                          new-messages (into new-messages results)]
+                      (recur (assoc current-payload :messages new-messages :tools new-tools) (inc iteration)))))))))))))
 
 (defn- set-cooldown! [provider minutes]
   (swap! cooldown-state assoc provider (+ (System/currentTimeMillis) (* minutes 60 1000))))
@@ -184,16 +190,55 @@
 (defn reset-cooldowns! []
   (reset! cooldown-state {}))
 
-(defn- prepare-llm-request [chat-req _mcp-servers]
-  (-> chat-req
-      (dissoc :stream)
-      (update :messages (fn [msgs]
-                          (mapv (fn [m]
-                                  (if (and (= (:role m) "assistant") (:tool_calls m))
-                                    (update m :tool_calls (fn [tcs]
-                                                            (mapv #(dissoc % :index) tcs)))
-                                    m))
-                                msgs)))))
+(defn- body->string [body]
+  (if (string? body) body (slurp body)))
+
+(defn- extract-discovered-tools
+  "Scan messages for tool schemas returned by get_tool_schema.
+   Returns a map of tool-name -> full tool schema."
+  [messages]
+  (reduce
+   (fn [acc msg]
+     (if (= "tool" (:role msg))
+       (let [content (:content msg)
+             parsed (try (json/parse-string (body->string content) true) (catch Exception _ nil))]
+         (if (and parsed (:name parsed))
+           (let [tool-name (:name parsed)
+                 formatted-name (if (str/includes? tool-name "__")
+                                  tool-name
+                                  (str "mcp__" tool-name))]
+             (assoc acc formatted-name parsed))
+           acc))
+       acc))
+   {}
+   messages))
+
+(defn- prepare-llm-request [chat-req mcp-servers]
+  (let [meta-tools (config/get-meta-tool-definitions)
+        discovered-tools (extract-discovered-tools (:messages chat-req))
+        existing-tools (:tools chat-req)
+        fallbacks (config/get-llm-fallbacks mcp-servers)
+        discovered-tool-defs (map (fn [[name schema]]
+                                    {:type "function"
+                                     :function {:name name
+                                                :description (:description schema)
+                                                :parameters (:inputSchema schema)}})
+                                  discovered-tools)
+        merged-tools (vec (concat (or existing-tools [])
+                                  meta-tools
+                                  discovered-tool-defs))]
+    (-> chat-req
+        (assoc :stream false)
+        (dissoc :stream_options)
+        (assoc :fallbacks fallbacks)
+        (update :messages (fn [msgs]
+                            (mapv (fn [m]
+                                    (if (and (= (:role m) "assistant") (:tool_calls m))
+                                      (update m :tool_calls (fn [tcs]
+                                                              (mapv #(dissoc % :index) tcs)))
+                                      m))
+                                  msgs)))
+        (assoc :tools merged-tools))))
 
 (defn- try-virtual-model-chain [config prepared-req llm-url mcp-servers max-iterations]
   (let [chain (:chain config)
@@ -270,7 +315,8 @@
 (defn get-gateway-state []
   {:cooldowns @cooldown-state
    :usage @usage-stats
-   :warming-up? (not (realized? (get @server-state :warmup-future)))})
+   :warming-up? (let [fut (get @server-state :warmup-future)]
+                  (if fut (not (realized? fut)) false))})
 
 (defn- handle-api [request _mcp-servers _config]
   (let [uri (:uri request)
@@ -310,6 +356,9 @@
         (= uri "/health")
         {:status 200 :headers {"Content-Type" "application/json"} :body (json/generate-string {:status "ok"})}
 
+        (= uri "/stats")
+        {:status 200 :headers {"Content-Type" "application/json"} :body (json/generate-string {:stats @usage-stats})}
+
         (str/starts-with? uri "/api/v1")
         (handle-api request mcp-servers config)
 
@@ -344,10 +393,16 @@
         mcp-config-path (or (:mcp-config-path initial-config)
                             (System/getenv "MCP_INJECTOR_MCP_CONFIG")
                             "mcp-servers.edn")
-        mcp-servers (cond
-                      (and (map? mcp-config) (:servers mcp-config)) mcp-config
-                      (:mcp-servers initial-config) (:mcp-servers initial-config)
-                      :else (config/load-mcp-servers mcp-config-path))
+        ;; Merge provided mcp-config with loaded ones if needed
+        base-mcp-servers (cond
+                           (and (map? mcp-config) (:servers mcp-config)) mcp-config
+                           (:mcp-servers initial-config) (:mcp-servers initial-config)
+                           :else (config/load-mcp-servers mcp-config-path))
+        ;; Apply overrides from initial-config (like :virtual-models in tests)
+        mcp-servers (if (seq initial-config)
+                      (let [gateway-overrides (select-keys initial-config [:virtual-models :fallbacks :url])]
+                        (update base-mcp-servers :llm-gateway merge gateway-overrides))
+                      base-mcp-servers)
         final-config {:port port :host host :llm-url llm-url :log-level log-level :max-iterations max-iterations :mcp-config-path mcp-config-path}
         srv (http/run-server (fn [req] (handler req mcp-servers final-config)) {:port port :host host})
         actual-port (or (:local-port (meta srv)) port)
