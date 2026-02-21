@@ -9,7 +9,7 @@
             [mcp-injector.test-mcp-server :as test-mcp]
             [mcp-injector.test-llm-server :as test-llm]))
 
-(defn- body->string [body]
+(defn body->string [body]
   (if (string? body) body (slurp body)))
 
 ;; Test infrastructure state

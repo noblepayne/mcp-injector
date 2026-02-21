@@ -1,5 +1,6 @@
 (ns mcp-injector.json-error-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.test :refer [deftest is]]
+            [clojure.string :as str]
             [cheshire.core :as json]
             [mcp-injector.core :as core]
             [org.httpkit.client :as http]))
@@ -14,6 +15,6 @@
             body (json/parse-string (:body response) true)]
         (is (= 400 (:status response)))
         (is (= "json_parse_error" (get-in body [:error :type])))
-        (is (clojure.string/includes? (get-in body [:error :message]) "Failed to parse JSON body")))
+        (is (str/includes? (get-in body [:error :message]) "Failed to parse JSON body")))
       (finally
         (core/stop-server injector)))))

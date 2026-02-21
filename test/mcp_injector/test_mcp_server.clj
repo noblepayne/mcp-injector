@@ -2,10 +2,7 @@
   "Real http-kit MCP server for integration testing.
    Implements enough of the MCP protocol to test mcp-injector."
   (:require [org.httpkit.server :as http]
-            [cheshire.core :as json]
-            [clojure.string :as str]))
-
-(def ^:private server-state (atom nil))
+            [cheshire.core :as json]))
 
 (defn- body-to-sse
   "Convert JSON-RPC response body to SSE format"
@@ -95,13 +92,6 @@
                 :id (:id body)
                 :error {:code -32601
                         :message (str "Method not found: " method)}}}))))
-
-(defn- body-to-sse
-  "Convert JSON-RPC response body to SSE format"
-  [json-body-str]
-  (str "event: message\r\n"
-       "data: " json-body-str "\r\n"
-       "\r\n"))
 
 (defn handler
   "HTTP handler for MCP server"

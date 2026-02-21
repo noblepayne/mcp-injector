@@ -9,7 +9,7 @@
             [mcp-injector.mcp-client :as mcp]
             [mcp-injector.test-mcp-server :as test-mcp]
             [mcp-injector.test-llm-server :as test-llm]
-            [mcp-injector.integration-test :refer [body->string]]))
+            [mcp-injector.integration-test :as integration]))
 
 (def ^:dynamic *test-mcp-sse* nil)
 (def ^:dynamic *test-mcp-json* nil)
@@ -21,12 +21,12 @@
   (let [mcp-sse (test-mcp/start-test-mcp-server :response-mode :sse)
         mcp-json (test-mcp/start-test-mcp-server :response-mode :json)
         llm-server (test-llm/start-server)
-        injector-server (core/start-server 
+        injector-server (core/start-server
                          {:port 0
                           :host "127.0.0.1"
                           :llm-url (str "http://localhost:" (:port llm-server))
                           :mcp-servers {:servers {:sse-server {:url (str "http://localhost:" (:port mcp-sse))}
-                                                 :json-server {:url (str "http://localhost:" (:port mcp-json))}}
+                                                  :json-server {:url (str "http://localhost:" (:port mcp-json))}}
                                         :llm-gateway {:url (str "http://localhost:" (:port llm-server))}}})]
     (try
       (binding [*test-mcp-sse* mcp-sse
@@ -46,10 +46,10 @@
   (testing "Injector correctly discovers tools from a server responding with SSE"
     (mcp/clear-tool-cache!)
     (test-llm/clear-responses *test-llm*)
-    
+
     ;; Trigger tool discovery via warm-up
     (mcp/warm-up! {:servers {:sse-server {:url (str "http://localhost:" (:port *test-mcp-sse*))}}})
-    
+
     (let [tools (mcp/discover-tools "sse-server" {:url (str "http://localhost:" (:port *test-mcp-sse*))} nil)]
       (is (seq tools))
       (is (some #(= "retrieve_customer" (:name %)) tools)))))
@@ -71,13 +71,12 @@
                                         :messages [{:role "user" :content "Find sse_123"}]
                                         :stream false})
                                 :headers {"Content-Type" "application/json"}})
-          body (json/parse-string (body->string (:body response)) true)
           mcp-reqs @(:received-requests *test-mcp-sse*)
           call-req (some #(when (= "tools/call" (get-in % [:body :method])) %) mcp-reqs)]
-      
+
       (is (= 200 (:status response)))
       (is (some? call-req))
-      (is (str/includes? (body->string (:body response)) "FOUND_IT")))))
+      (is (str/includes? (integration/body->string (:body response)) "FOUND_IT")))))
 
 (deftest mixed-servers-json-and-sse
   (testing "Injector handles multiple servers with different response formats (JSON and SSE)"
@@ -103,8 +102,8 @@
                                 :headers {"Content-Type" "application/json"}})
           mcp-json-reqs @(:received-requests *test-mcp-json*)
           mcp-sse-reqs @(:received-requests *test-mcp-sse*)]
-      
+
       (is (= 200 (:status response)))
       (is (some #(when (= "tools/call" (get-in % [:body :method])) %) mcp-json-reqs))
       (is (some #(when (= "tools/call" (get-in % [:body :method])) %) mcp-sse-reqs))
-      (is (str/includes? (body->string (:body response)) "BOTH_DONE")))))
+      (is (str/includes? (integration/body->string (:body response)) "BOTH_DONE")))))
