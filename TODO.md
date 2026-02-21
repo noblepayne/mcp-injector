@@ -19,3 +19,6 @@ how to handle 502? which might be context issue. how to make sure we communicate
 
 
 - [ ] errors on parsing like invalid json, just gives null back to curl?
+
+
+- [ ] logging how initializing of mcp but not clear on which one...
