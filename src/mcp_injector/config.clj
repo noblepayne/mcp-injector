@@ -113,7 +113,7 @@
                                          (map name tool-names))
                                  tools (filter some? tools)
                                  tool-str (str/join ", " tools)]
-                             (if (not (empty? tools))
+                             (if (seq tools)
                                (conj lines (str "- mcp__" (name server-name) ": " tool-str))
                                lines))
                            lines)))
