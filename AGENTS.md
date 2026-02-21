@@ -15,6 +15,10 @@ We practice **test-driven development with real integration tests**:
 - **Real servers, not mocks** - Spin up in-process HTTP servers for testing
 - **Integration over unit** - Test the full request/response cycle
 - **Don't mock what you don't own** - Test against real protocol implementations
+- **Test the progressive flow specifically** - Ensure tests cover the full Directory -> Discover -> Call lifecycle
+- **Case-insensitive headers** - MCP/HTTP headers are often lowercased by servers; tests must be robust
+- **Config Merging is tricky** - Always prioritize explicit test overrides over file-based config
+- **Loop state is precious** - Changes to the agent loop must be verified against history persistence
 
 **Why real servers?**
 
