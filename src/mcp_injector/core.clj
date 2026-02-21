@@ -108,20 +108,21 @@
             schema))
         {:error (str "Server not found: " s-name)}))
 
-    :else
-    (let [[s-name t-name] (if (str/includes? full-name "__")
-                            (str/split full-name #"__" 2)
-                            [nil full-name])
+    (str/starts-with? full-name "mcp__")
+    (let [[_ s-name t-name] (str/split full-name #"__" 3)
           s-config (when s-name (get-in mcp-servers [:servers (keyword s-name)]))]
       (if (and s-name s-config)
         (mcp/call-tool (name s-name) s-config t-name args)
-        (let [server-id (some (fn [[s-id tools]]
-                                (when (some #(= t-name (:name %)) tools) s-id))
-                              discovered-this-loop)
-              s-conf (when server-id (get-in mcp-servers [:servers (keyword server-id)]))]
-          (if (and server-id s-conf)
-            (mcp/call-tool (name server-id) s-conf t-name args)
-            {:error (str "Tool not found or server not configured: " full-name)}))))))
+        {:error (str "MCP server not found or misconfigured for namespaced tool: " full-name)}))
+
+    :else
+    (let [server-id (some (fn [[s-id tools]]
+                            (when (some #(= full-name (:name %)) tools) s-id))
+                          discovered-this-loop)
+          s-conf (when server-id (get-in mcp-servers [:servers (keyword server-id)]))]
+      (if (and server-id s-conf)
+        (mcp/call-tool (name server-id) s-conf full-name args)
+        {:error (str "Tool not found or server not configured: " full-name)}))))
 
 (defn- agent-loop [llm-url payload mcp-servers max-iterations]
   (loop [current-payload payload
@@ -137,23 +138,28 @@
                 tool-calls (:tool_calls message)]
             (if-not tool-calls
               resp
-              (let [discovered (reduce (fn [acc [s-id s-conf]]
-                                         (assoc acc (name s-id) (mcp/discover-tools (name s-id) s-conf (:tools s-conf))))
-                                       {} (:servers mcp-servers))
-                    results (mapv (fn [tc]
-                                    (let [fn-name (get-in tc [:function :name])
-                                          args-str (get-in tc [:function :arguments])
-                                          args (try (json/parse-string args-str true) (catch Exception _ args-str))
-                                          result (execute-tool fn-name args mcp-servers discovered)]
-                                      {:role "tool"
-                                       :tool_call_id (:id tc)
-                                       :name fn-name
-                                       :content (if (string? result) result (json/generate-string result))}))
-                                  tool-calls)
-                    new-messages (conj (vec (:messages current-payload))
-                                       message)
-                    new-messages (into new-messages results)]
-                (recur (assoc current-payload :messages new-messages) (inc iteration))))))))))
+              (let [mcp-calls (filter #(or (= (get-in % [:function :name]) "get_tool_schema")
+                                           (str/starts-with? (get-in % [:function :name]) "mcp__"))
+                                      tool-calls)]
+                (if (empty? mcp-calls)
+                  resp
+                  (let [discovered (reduce (fn [acc [s-id s-conf]]
+                                             (assoc acc (name s-id) (mcp/discover-tools (name s-id) s-conf (:tools s-conf))))
+                                           {} (:servers mcp-servers))
+                        results (mapv (fn [tc]
+                                        (let [fn-name (get-in tc [:function :name])
+                                              args-str (get-in tc [:function :arguments])
+                                              args (try (json/parse-string args-str true) (catch Exception _ args-str))
+                                              result (execute-tool fn-name args mcp-servers discovered)]
+                                          {:role "tool"
+                                           :tool_call_id (:id tc)
+                                           :name fn-name
+                                           :content (if (string? result) result (json/generate-string result))}))
+                                      mcp-calls)
+                        new-messages (conj (vec (:messages current-payload))
+                                           message)
+                        new-messages (into new-messages results)]
+                    (recur (assoc current-payload :messages new-messages) (inc iteration))))))))))))
 
 (defn- set-cooldown! [provider minutes]
   (swap! cooldown-state assoc provider (+ (System/currentTimeMillis) (* minutes 60 1000))))

@@ -46,7 +46,7 @@
                            {:body (json/generate-string {:jsonrpc "2.0" :method "notifications/initialized" :params {}})
                             :headers {"Mcp-Session-Id" session-id
                                       "Content-Type" "application/json"
-                                      "Accept" "application/json"
+                                      "Accept" "application/json, text/event-stream"
                                       "MCP-Protocol-Version" PROTOCOL_VERSION}})
                 (catch Exception e
                   (log-request "debug" "Failed to send initialized notification (ignoring)" {:error (.getMessage e)})))
