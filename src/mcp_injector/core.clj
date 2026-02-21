@@ -109,11 +109,21 @@
         {:error (str "Server not found: " s-name)}))
 
     (str/starts-with? full-name "mcp__")
-    (let [[_ s-name t-name] (str/split full-name #"__" 3)
+    (let [t-name (str/replace full-name #"^mcp__" "")
+          [s-name real-t-name] (if (str/includes? t-name "__")
+                                 (let [idx (str/last-index-of t-name "__")]
+                                   [(subs t-name 0 idx) (subs t-name (+ idx 2))])
+                                 [nil t-name])
           s-config (when s-name (get-in mcp-servers [:servers (keyword s-name)]))]
       (if (and s-name s-config)
-        (mcp/call-tool (name s-name) s-config t-name args)
-        {:error (str "MCP server not found or misconfigured for namespaced tool: " full-name)}))
+        (mcp/call-tool (name s-name) s-config real-t-name args)
+        (let [server-id (some (fn [[s-id tools]]
+                                (when (some #(= real-t-name (:name %)) tools) s-id))
+                              discovered-this-loop)
+              s-conf (when server-id (get-in mcp-servers [:servers (keyword server-id)]))]
+          (if (and server-id s-conf)
+            (mcp/call-tool (name server-id) s-conf real-t-name args)
+            {:error (str "Tool not found or server not configured for: " full-name)}))))
 
     :else
     (let [server-id (some (fn [[s-id tools]]

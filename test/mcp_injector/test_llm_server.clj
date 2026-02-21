@@ -122,9 +122,10 @@
   (stop))
 
 (defn set-next-response
-  "Convenience function to queue a success response"
+  "Set the next response to be returned by the simulator"
   [server response-data]
-  ((:set-response! server) {:type :success :data response-data}))
+  (when-let [set-fn (:set-response! server)]
+    (set-fn {:type :success :data response-data})))
 
 (defn set-error-response
   "Set an error response with specific status code"
@@ -146,9 +147,10 @@
 (defn set-tool-call-response
   "Set a response that includes tool calls"
   [server tool-calls]
-  (set-next-response server
-                     {:role "assistant"
-                      :tool_calls tool-calls}))
+  (when-let [set-fn (:set-response! server)]
+    (set-fn {:type :success
+             :data {:role "assistant"
+                    :tool_calls tool-calls}})))
 
 (defn set-response-with-usage
   "Set a success response with specific usage stats"
@@ -159,4 +161,5 @@
 (defn clear-responses
   "Clear all queued responses"
   [server]
-  ((:clear-responses! server)))
+  (when-let [clear-fn (:clear-responses! server)]
+    (clear-fn)))

@@ -111,8 +111,11 @@
                            (let [tools (if (and pre-discovered-tools (get pre-discovered-tools server-name))
                                          (map :name (get pre-discovered-tools server-name))
                                          (map name tool-names))
+                                 tools (filter some? tools)
                                  tool-str (str/join ", " tools)]
-                             (conj lines (str "- mcp__" (name server-name) ": " tool-str)))
+                             (if (not (empty? tools))
+                               (conj lines (str "- mcp__" (name server-name) ": " tool-str))
+                               lines))
                            lines)))
                      []
                      servers)

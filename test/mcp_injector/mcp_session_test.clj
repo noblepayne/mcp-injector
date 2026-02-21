@@ -37,7 +37,8 @@
 
 (defn clear-mcp-requests-fixture
   [test-fn]
-  (reset! (:received-requests *test-mcp*) [])
+  (when (and *test-mcp* (:received-requests *test-mcp*))
+    (reset! (:received-requests *test-mcp*) []))
   (test-fn))
 
 (use-fixtures :each clear-mcp-requests-fixture)
