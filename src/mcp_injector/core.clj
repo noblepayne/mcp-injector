@@ -158,7 +158,7 @@
                     (let [results (mapv (fn [tc]
                                           (let [fn-name (get-in tc [:function :name])
                                                 args-str (get-in tc [:function :arguments])
-                                                args (try (json/parse-string args-str true) (catch Exception _ args-str))
+                                                args (try (json/parse-string args-str true) (catch Exception _ {}))
                                                 result (execute-tool fn-name args mcp-servers discovered-this-loop)]
                                             {:role "tool"
                                              :tool_call_id (:id tc)
