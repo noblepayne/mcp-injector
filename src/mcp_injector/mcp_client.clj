@@ -65,6 +65,18 @@
   (or (get @http-sessions server-url)
       (initialize-http-session! server-url)))
 
+(defn- parse-mcp-body [resp]
+  (let [ct (get-in resp [:headers "content-type"] "")]
+    (if (str/includes? ct "text/event-stream")
+      (->> (str/split-lines (:body resp))
+           (filter #(str/starts-with? % "data: "))
+           (keep #(try (json/parse-string (subs % 6) true)
+                       (catch Exception _ nil)))
+           ;; find the one that's a JSON-RPC response (has :result or :error, not a notification)
+           (filter :id)
+           first)
+      (json/parse-string (:body resp) true))))
+
 (defn- call-http [server-url method params]
   (try
     (let [sid (get-http-session! server-url)
@@ -81,7 +93,7 @@
                            :client http-client
                            :throw false})
           status (:status resp)
-          body (json/parse-string (:body resp) true)]
+          body (parse-mcp-body resp)]
       (cond
         (= 200 status) body
         (and sid (#{400 401 404} status))
