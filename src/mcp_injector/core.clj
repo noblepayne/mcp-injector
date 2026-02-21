@@ -119,7 +119,7 @@
           s-config (when s-name (get-in mcp-servers [:servers (keyword s-name)]))]
       (if (and s-name s-config)
         (mcp/call-tool (name s-name) s-config real-t-name args)
-        (if-let [schema (get @discovered-this-loop full-name)]
+        (if-let [_ (get @discovered-this-loop full-name)]
           (let [[_ s-name-auto real-t-auto] (str/split full-name #"__" 3)
                 s-conf-auto (get-in mcp-servers [:servers (keyword s-name-auto)])]
             (mcp/call-tool (name s-name-auto) s-conf-auto real-t-auto args))

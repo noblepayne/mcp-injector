@@ -107,17 +107,17 @@
                        (let [server-url (or (:url server-config) (:uri server-config))
                              cmd (:cmd server-config)
                              tool-names (:tools server-config)]
-                          (if (or server-url cmd)
-                            (let [discovered (get pre-discovered-tools server-name)
-                                  tools (if (and pre-discovered-tools discovered)
-                                          (map :name discovered)
-                                          (map name tool-names))
-                                  tools (filter some? tools)
-                                  tool-str (str/join ", " tools)]
-                              (if (seq tools)
-                                (conj lines (str "- mcp__" (name server-name) ": " tool-str))
-                                lines))
-                            lines)))
+                         (if (or server-url cmd)
+                           (let [discovered (get pre-discovered-tools server-name)
+                                 tools (if (and pre-discovered-tools discovered)
+                                         (map :name discovered)
+                                         (map name tool-names))
+                                 tools (filter some? tools)
+                                 tool-str (str/join ", " tools)]
+                             (if (seq tools)
+                               (conj lines (str "- mcp__" (name server-name) ": " tool-str))
+                               lines))
+                           lines)))
                      []
                      servers)
          directory-text (str "## Remote Capabilities (Injected)\n"

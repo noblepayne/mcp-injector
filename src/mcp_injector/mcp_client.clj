@@ -10,6 +10,8 @@
 
 (def ^:const PROTOCOL_VERSION "2025-03-26")
 
+(def http-client (http/client {:version :http1.1}))
+
 (defn- log-request [level message data]
   (println (json/generate-string
             {:timestamp (str (java.time.Instant/now))
@@ -26,6 +28,7 @@
           _ (log-request "debug" "Initializing HTTP MCP session" {:url server-url})
           init-resp (http/post server-url
                                {:body (json/generate-string init-body)
+                                :client http-client
                                 :headers {"Content-Type" "application/json"
                                           "Accept" "application/json, text/event-stream"
                                           "MCP-Protocol-Version" PROTOCOL_VERSION}})
@@ -44,6 +47,7 @@
               (try
                 (http/post server-url
                            {:body (json/generate-string {:jsonrpc "2.0" :method "notifications/initialized" :params {}})
+                            :client http-client
                             :headers {"Mcp-Session-Id" session-id
                                       "Content-Type" "application/json"
                                       "Accept" "application/json, text/event-stream"
@@ -74,6 +78,7 @@
                                    :id (str (java.util.UUID/randomUUID))
                                    :method method
                                    :params params})
+                           :client http-client
                            :throw false})
           status (:status resp)
           body (json/parse-string (:body resp) true)]
