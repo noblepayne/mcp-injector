@@ -283,21 +283,29 @@
       {:status 404 :body (json/generate-string {:error "Not found"})})))
 
 (defn- handler [request mcp-servers config]
-  (let [uri (:uri request)]
-    (cond
-      (= uri "/v1/chat/completions")
-      (if (= :post (:request-method request))
-        (handle-chat-completion request mcp-servers config)
-        {:status 405 :body "Method not allowed"})
+  (try
+    (let [uri (:uri request)]
+      (cond
+        (= uri "/v1/chat/completions")
+        (if (= :post (:request-method request))
+          (handle-chat-completion request mcp-servers config)
+          {:status 405 :body "Method not allowed"})
 
-      (= uri "/health")
-      {:status 200 :headers {"Content-Type" "application/json"} :body (json/generate-string {:status "ok"})}
+        (= uri "/health")
+        {:status 200 :headers {"Content-Type" "application/json"} :body (json/generate-string {:status "ok"})}
 
-      (str/starts-with? uri "/api/v1")
-      (handle-api request mcp-servers config)
+        (str/starts-with? uri "/api/v1")
+        (handle-api request mcp-servers config)
 
-      :else
-      {:status 404 :body "Not found"})))
+        :else
+        {:status 404 :body "Not found"}))
+    (catch Exception e
+      (let [err-type (or (some-> e ex-data :type name) "internal_error")]
+        (log-request "error" "Request failed" {:uri (:uri request) :type err-type :message (.getMessage e)})
+        {:status 500
+         :headers {"Content-Type" "application/json"}
+         :body (json/generate-string {:error {:message (or (.getMessage e) "Internal server error")
+                                              :type err-type}})}))))
 
 (defn start-server [mcp-config]
   (let [initial-config (if (and (map? mcp-config) (not (:servers mcp-config)))
