@@ -79,7 +79,7 @@
       (is (= 200 (:status response)))
       ;; Check that directory was injected
       (is (str/includes? (get-in first-req [:messages 0 :content]) "mcp__stripe"))
-      
+
       ;; Check that get_tool_schema was available
       (is (some (fn [t] (= "get_tool_schema" (get-in t [:function :name]))) (get-in first-req [:tools])))
 
