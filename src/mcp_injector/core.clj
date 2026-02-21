@@ -24,7 +24,10 @@
       (json/parse-string body true)
       (json/parse-string (slurp body) true))
     (catch Exception e
-      (throw (ex-info "Failed to parse JSON body" {:type :json-parse-error} e)))))
+      (throw (ex-info "Failed to parse JSON body"
+                      {:type :json_parse_error
+                       :status 400
+                       :message "Failed to parse JSON body. Please ensure your request is valid JSON."} e)))))
 
 (defn- is-context-overflow-error? [error-str]
   (when (string? error-str)
@@ -377,11 +380,13 @@
         :else
         {:status 404 :body "Not found"}))
     (catch Exception e
-      (let [err-type (or (some-> e ex-data :type name) "internal_error")]
+      (let [err-data (ex-data e)
+            status (or (:status err-data) 500)
+            err-type (or (some-> err-data :type name) "internal_error")]
         (log-request "error" "Request failed" {:uri (:uri request) :type err-type :message (.getMessage e)})
-        {:status 500
+        {:status status
          :headers {"Content-Type" "application/json"}
-         :body (json/generate-string {:error {:message (or (.getMessage e) "Internal server error")
+         :body (json/generate-string {:error {:message (or (:message err-data) (.getMessage e) "Internal server error")
                                               :type err-type}})}))))
 
 (defn start-server [mcp-config]

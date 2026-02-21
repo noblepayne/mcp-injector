@@ -12,12 +12,16 @@
                 (require 'mcp-injector.virtual-model-test)
                 (require 'mcp-injector.llm-shim-test)
                 (require 'mcp-injector.mcp-client-headers-test)
+                (require 'mcp-injector.mcp-client-sse-test)
+                (require 'mcp-injector.json-error-test)
                 (let [{:keys [fail error]} (t/run-tests 'mcp-injector.integration-test
                                                         'mcp-injector.discovery-test
                                                         'mcp-injector.mcp-session-test
                                                         'mcp-injector.virtual-model-test
                                                         'mcp-injector.llm-shim-test
-                                                        'mcp-injector.mcp-client-headers-test)]
+                                                        'mcp-injector.mcp-client-headers-test
+                                                        'mcp-injector.mcp-client-sse-test
+                                                        'mcp-injector.json-error-test)]
                   (when (pos? (+ fail error))
                     (System/exit 1))))}
 

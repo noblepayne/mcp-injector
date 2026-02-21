@@ -66,8 +66,10 @@
       (initialize-http-session! server-url)))
 
 (defn- parse-mcp-body [resp]
-  (let [ct (get-in resp [:headers "content-type"] "")]
-    (if (str/includes? ct "text/event-stream")
+  (let [ct (or (get-in resp [:headers "content-type"])
+               (get-in resp [:headers :content-type])
+               "")]
+    (if (str/includes? (str/lower-case ct) "text/event-stream")
       (->> (str/split-lines (:body resp))
            (filter #(str/starts-with? % "data: "))
            (keep #(try (json/parse-string (subs % 6) true)

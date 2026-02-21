@@ -2,13 +2,21 @@
   "Real http-kit MCP server for integration testing.
    Implements enough of the MCP protocol to test mcp-injector."
   (:require [org.httpkit.server :as http]
-            [cheshire.core :as json]))
+            [cheshire.core :as json]
+            [clojure.string :as str]))
 
 (def ^:private server-state (atom nil))
 
+(defn- body-to-sse
+  "Convert JSON-RPC response body to SSE format"
+  [json-body-str]
+  (str "event: message\r\n"
+       "data: " json-body-str "\r\n"
+       "\r\n"))
+
 (defn- handle-mcp-request
   "Handle incoming MCP JSON-RPC request"
-  [request]
+  [request state]
   (let [body-str (slurp (:body request))
         body (json/parse-string body-str true)
         method (get-in body [:params :method] (:method body))
@@ -16,16 +24,16 @@
         session-id (or (get headers "mcp-session-id")
                        (get headers "Mcp-Session-Id")
                        (get headers :mcp-session-id))
-        require-session? (:require-session @server-state)]
-    (swap! (:received-requests @server-state) conj {:body body :headers headers})
+        require-session? (:require-session state)]
+    (swap! (:received-requests state) conj {:body body :headers headers})
 
     (cond
       ;; Initialize method - always allowed, creates session
       (= method "initialize")
       (let [new-session-id (str (java.util.UUID/randomUUID))]
         {:status 200
-         :headers {"Content-Type" "application/json"
-                   "Mcp-Session-Id" new-session-id}
+         :headers {"content-type" "application/json"
+                   "mcp-session-id" new-session-id}
          :body {:jsonrpc "2.0"
                 :id (:id body)
                 :result {:protocolVersion "2025-03-26"
@@ -36,83 +44,112 @@
       (and require-session? (not session-id)
            (not= method "notifications/initialized"))
       {:status 400
-       :headers {"Content-Type" "application/json"}
+       :headers {"content-type" "application/json"}
        :body {:error "Missing session ID"}}
 
       ;; Normal methods
       :else
-      (let [result (case method
-                     "notifications/initialized"
-                     {:status 202 :body nil}
+      (case method
+        "notifications/initialized"
+        {:status 202 :body nil}
 
-                     "tools/list"
-                     {:status 200
-                      :body {:jsonrpc "2.0"
-                             :id (:id body)
-                             :result {:tools (let [tools @(:tools @server-state)]
-                                               (if (map? tools)
-                                                 (map (fn [[name schema]]
-                                                        {:name (clojure.core/name name)
-                                                         :description (:description schema)
-                                                         :inputSchema (:schema schema)})
-                                                      tools)
-                                                 (map (fn [tool]
-                                                        {:name (:name tool)
-                                                         :description (:description tool)
-                                                         :inputSchema (:inputSchema tool)})
-                                                      tools)))}}}
+        "tools/list"
+        {:status 200
+         :headers {"content-type" "application/json"}
+         :body {:jsonrpc "2.0"
+                :id (:id body)
+                :result {:tools (let [tools @(:tools state)]
+                                  (if (map? tools)
+                                    (map (fn [[name schema]]
+                                           {:name (clojure.core/name name)
+                                            :description (:description schema)
+                                            :inputSchema (:schema schema)})
+                                         tools)
+                                    (map (fn [tool]
+                                           {:name (:name tool)
+                                            :description (:description tool)
+                                            :inputSchema (:inputSchema tool)})
+                                         tools)))}}}
 
-                     "tools/call"
-                     (let [tool-name (get-in body [:params :name])
-                           args (get-in body [:params :arguments])
-                           tools @(:tools @server-state)
-                           handler (or (get-in tools [tool-name :handler])
-                                       (get-in tools [(keyword tool-name) :handler]))]
-                       {:status 200
-                        :body {:jsonrpc "2.0"
-                               :id (:id body)
-                               :result (if handler
-                                         {:content [{:type "text"
-                                                     :text (json/generate-string (handler args))}]}
-                                         {:content [{:type "text"
-                                                     :text (json/generate-string {:error (str "Tool not found: " tool-name)})}]
-                                          :isError true})}})
+        "tools/call"
+        (let [tool-name (get-in body [:params :name])
+              args (get-in body [:params :arguments])
+              tools @(:tools state)
+              handler (or (get-in tools [tool-name :handler])
+                          (get-in tools [(keyword tool-name) :handler]))]
+          {:status 200
+           :headers {"content-type" "application/json"}
+           :body {:jsonrpc "2.0"
+                  :id (:id body)
+                  :result (if handler
+                            {:content [{:type "text"
+                                        :text (json/generate-string (handler args))}]}
+                            {:content [{:type "text"
+                                        :text (json/generate-string {:error (str "Tool not found: " tool-name)})}]
+                             :isError true})}})
 
-                     ;; Unknown method
-                     {:status 404
-                      :body {:jsonrpc "2.0"
-                             :id (:id body)
-                             :error {:code -32601
-                                     :message (str "Method not found: " method)}}})]
-        (update result :body json/generate-string)))))
+        ;; Unknown method
+        {:status 404
+         :headers {"content-type" "application/json"}
+         :body {:jsonrpc "2.0"
+                :id (:id body)
+                :error {:code -32601
+                        :message (str "Method not found: " method)}}}))))
+
+(defn- body-to-sse
+  "Convert JSON-RPC response body to SSE format"
+  [json-body-str]
+  (str "event: message\r\n"
+       "data: " json-body-str "\r\n"
+       "\r\n"))
 
 (defn handler
   "HTTP handler for MCP server"
-  [request]
+  [request state]
   (if (= :post (:request-method request))
-    (let [resp (handle-mcp-request request)]
-      (if (string? (:body resp))
-        resp
-        (update resp :body json/generate-string)))
+    (let [resp (handle-mcp-request request state)
+          status (:status resp)
+          body (:body resp)
+          resp-headers (:headers resp)
+          sse-mode? (and (= :sse (:response-mode state))
+                         (not= 202 status))]
+      (cond
+        ;; 202 No Content - notifications
+        (= 202 status)
+        {:status 202 :body ""}
+
+        ;; SSE mode - wrap body in SSE format
+        sse-mode?
+        (let [json-body (if (string? body) body (json/generate-string body))]
+          {:status 200
+           :headers (merge resp-headers
+                           {"content-type" "text/event-stream"
+                            "cache-control" "no-cache"})
+           :body (body-to-sse json-body)})
+
+        ;; Normal JSON mode
+        :else
+        {:status status
+         :headers (merge {"content-type" "application/json"} resp-headers)
+         :body (if (string? body) body (json/generate-string body))}))
     {:status 405
      :body "Method not allowed"}))
 
 (defn start-server
   "Start test MCP server on random port.
    Returns map with :port, :stop function, :received-requests atom"
-  [& {:keys [tools require-session]}]
+  [& {:keys [tools require-session response-mode]}]
   (let [received-reqs (atom [])
-        srv (http/run-server (fn [req] (handler req)) {:port 0})
+        state {:received-requests received-reqs
+               :tools (atom (or tools {}))
+               :require-session require-session
+               :response-mode (or response-mode :json)}
+        srv (http/run-server (fn [req] (handler req state)) {:port 0})
         port (:local-port (meta srv))]
-    (reset! server-state {:server srv
-                          :port port
-                          :received-requests received-reqs
-                          :tools (atom (or tools {}))
-                          :require-session require-session})
     {:port port
      :stop srv
      :received-requests received-reqs
-     :set-tools! (fn [new-tools] (reset! (:tools @server-state) new-tools))}))
+     :set-tools! (fn [new-tools] (reset! (:tools state) new-tools))}))
 
 (defn stop-server
   "Stop the test MCP server"
@@ -143,5 +180,5 @@
 
 (defn start-test-mcp-server
   "Convenience function to start test MCP server with default Stripe tools"
-  []
-  (start-server :tools (default-stripe-tools)))
+  [& {:keys [response-mode]}]
+  (start-server :tools (default-stripe-tools) :response-mode response-mode))
