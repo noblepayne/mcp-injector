@@ -161,8 +161,7 @@
                 (let [mcp-calls (filter #(or (= (get-in % [:function :name]) "get_tool_schema")
                                              (str/starts-with? (get-in % [:function :name]) "mcp__"))
                                         tool-calls)
-                      native-calls (filter #(contains? #{"clojure-eval" "bb" "read" "write" "exec"}
-                                                       (get-in % [:function :name]))
+                      native-calls (filter #(= (get-in % [:function :name]) "clojure-eval")
                                            tool-calls)]
                   (if (and (empty? mcp-calls) (empty? native-calls))
                     resp

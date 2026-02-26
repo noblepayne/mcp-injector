@@ -97,3 +97,18 @@
                               :stream false})
                       :headers {"Content-Type" "application/json"}})]
       (is (= 200 (:status response))))))
+
+(deftest unknown-tools-fall-through
+  (testing "Unknown tools like exec pass through without being caught by our filter"
+    (test-llm/set-tool-call-response *test-llm*
+                                     [{:name "exec"
+                                       :arguments {:cmd "ls"}}])
+
+    (let [response @(http/post
+                     (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                     {:body (json/generate-string
+                             {:model "test-model"
+                              :messages [{:role "user" :content "run ls"}]
+                              :stream false})
+                      :headers {"Content-Type" "application/json"}})]
+      (is (= 200 (:status response))))))
