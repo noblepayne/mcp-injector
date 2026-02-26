@@ -135,7 +135,12 @@
                              "1. IDENTIFY tool in the directory above.\n"
                              "2. DISCOVER: Call `get_tool_schema(server, tool)` to get parameters.\n"
                              "3. EXECUTE: Call `mcp__[server]__[tool](...)` with the discovered parameters.\n\n"
-                             "DO NOT guess parameters for mcp__ tools. You MUST discover them first via `get_tool_schema`.")
+                             "DO NOT guess parameters for mcp__ tools. You MUST discover them first via `get_tool_schema`.\n\n"
+                             "### Native Tools:\n"
+                             "- clojure-eval: Evaluate Clojure code. Args: {:code \"clojure-expression\"}.\n"
+                             "  Use for computations, data transformations, reading app state.\n"
+                             "  Returns result as string. Use pr-str for data structures.\n"
+                             "  Example: {:code \"(vec (range 5))\"} => \"[0 1 2 3 4]\"")
          system-msg {:role "system" :content directory-text}]
      (cons system-msg messages))))
 

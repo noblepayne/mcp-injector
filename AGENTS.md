@@ -79,6 +79,35 @@ Keep these distinct:
 - Test behavior, not implementation
 - Avoid testing trivial code
 
+### Prompt & Tool Calling Best Practices
+
+When adding new tools or modifying system prompts, follow these guidelines to help LLMs reliably use tools:
+
+**1. Clear Step-by-Step Protocols**
+- Tell the model exactly how to use each tool in order
+- Example from our code:
+  ```
+  ### CALL PROTOCOL:
+  1. IDENTIFY tool in the directory above.
+  2. DISCOVER: Call `get_tool_schema(server, tool)` to get parameters.
+  3. EXECUTE: Call `mcp__[server]__[tool](...)` with the discovered parameters.
+  ```
+
+**2. Include Concrete Examples**
+- Show the model exactly what a tool call looks like
+- Example: `{:code "(vec (range 5))"} => "[0 1 2 3 4]"`
+
+**3. Remind Model to Ask Instead of Guess**
+- Add guidance like "DO NOT guess parameters" or "Ask follow-up questions if essential info is missing"
+
+**4. Limit Results**
+- Tell the model to return N results before asking for more
+- Prevents endless loops and keeps responses focused
+
+**5. Namespace Native Tools**
+- Use explicit names (e.g., `clojure-eval`) to avoid collisions with MCP tools
+- Don't add tools to the filter that aren't implemented
+
 ### Data-Driven, Not Class-Driven
 
 - Maps over objects
