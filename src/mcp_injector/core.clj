@@ -113,6 +113,14 @@
               schema)))
         {:error (str "Server not found: " s-name)}))
 
+    (= full-name "clojure-eval")
+    (try
+      (let [code (:code args)
+            result (load-string code)]
+        (pr-str result))
+      (catch Exception e
+        {:error (str "Eval error: " (.getMessage e))}))
+
     (str/starts-with? full-name "mcp__")
     (let [t-name (str/replace full-name #"^mcp__" "")
           [s-name real-t-name] (if (str/includes? t-name "__")
@@ -153,10 +161,10 @@
                 (let [mcp-calls (filter #(or (= (get-in % [:function :name]) "get_tool_schema")
                                              (str/starts-with? (get-in % [:function :name]) "mcp__"))
                                         tool-calls)
-                      native-calls (filter #(not (or (= (get-in % [:function :name]) "get_tool_schema")
-                                                     (str/starts-with? (get-in % [:function :name]) "mcp__")))
+                      native-calls (filter #(contains? #{"clojure-eval" "bb" "read" "write" "exec"}
+                                                       (get-in % [:function :name]))
                                            tool-calls)]
-                  (if (or (empty? mcp-calls) (seq native-calls))
+                  (if (and (empty? mcp-calls) (empty? native-calls))
                     resp
                     (let [results (mapv (fn [tc]
                                           (let [fn-name (get-in tc [:function :name])
@@ -179,7 +187,7 @@
                                                          {:error "Malformed tool arguments JSON"
                                                           :details {:args-str args-str
                                                                     :parse-error (:error parse-result)}})})))
-                                        mcp-calls)
+                                        (concat mcp-calls native-calls))
                           newly-discovered @discovered-this-loop
                           new-tools (vec (concat (config/get-meta-tool-definitions)
                                                  (map (fn [[name schema]]

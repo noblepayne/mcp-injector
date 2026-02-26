@@ -82,7 +82,7 @@
     (:servers mcp-config))))
 
 (defn get-meta-tool-definitions
-  "Get definitions for meta-tools like get_tool_schema"
+  "Get definitions for meta-tools like get_tool_schema and native tools"
   []
   [{:type "function"
     :function {:name "get_tool_schema"
@@ -92,7 +92,14 @@
                                                   :description "The name of the MCP server (e.g., 'stripe')"}
                                          :tool {:type "string"
                                                 :description "The name of the tool (e.g., 'retrieve_customer')"}}
-                            :required ["server" "tool"]}}}])
+                            :required ["server" "tool"]}}}
+   {:type "function"
+    :function {:name "clojure-eval"
+               :description "Evaluate Clojure code in the local REPL. WARNING: Full Clojure access - use with care. Returns the result as a string."
+               :parameters {:type "object"
+                            :properties {:code {:type "string"
+                                                :description "Clojure code to evaluate"}}
+                            :required ["code"]}}}])
 
 (defn inject-tools-into-messages
   "Inject MCP tools directory into messages.

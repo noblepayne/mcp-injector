@@ -14,6 +14,7 @@
                 (require 'mcp-injector.mcp-client-headers-test)
                 (require 'mcp-injector.mcp-client-sse-test)
                 (require 'mcp-injector.json-error-test)
+                (require 'mcp-injector.native-tools-test)
                 (let [{:keys [fail error]} (t/run-tests 'mcp-injector.integration-test
                                                         'mcp-injector.discovery-test
                                                         'mcp-injector.mcp-session-test
@@ -21,7 +22,8 @@
                                                         'mcp-injector.llm-shim-test
                                                         'mcp-injector.mcp-client-headers-test
                                                         'mcp-injector.mcp-client-sse-test
-                                                        'mcp-injector.json-error-test)]
+                                                        'mcp-injector.json-error-test
+                                                        'mcp-injector.native-tools-test)]
                   (when (pos? (+ fail error))
                     (System/exit 1))))}
 
