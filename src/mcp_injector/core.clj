@@ -129,7 +129,13 @@
                                  [nil t-name])
           s-config (when s-name (get-in mcp-servers [:servers (keyword s-name)]))]
       (if (and s-name s-config)
-        (mcp/call-tool (name s-name) s-config real-t-name args)
+        (let [result (mcp/call-tool (name s-name) s-config real-t-name args)
+              ;; Auto-discover: add schema to discovered-this-loop so next turn has it
+              _ (when-not (contains? result :error)
+                  (let [schema (mcp/get-tool-schema (name s-name) s-config real-t-name)]
+                    (when-not (:error schema)
+                      (swap! discovered-this-loop assoc full-name schema))))]
+          result)
         (if-let [_ (get @discovered-this-loop full-name)]
           (let [[_ s-name-auto real-t-auto] (str/split full-name #"__" 3)
                 s-conf-auto (get-in mcp-servers [:servers (keyword s-name-auto)])]

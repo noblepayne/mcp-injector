@@ -101,6 +101,29 @@
                                                 :description "Clojure code to evaluate"}}
                             :required ["code"]}}}])
 
+(defn- extract-tool-params
+  "Extract parameter names from tool schema, distinguishing required vs optional.
+   Returns [required-params optional-params] as vectors of strings."
+  [tool]
+  (let [schema (or (:inputSchema tool) (:schema tool))
+        properties (get schema :properties {})
+        required-vals (get schema :required [])
+        required-set (set (map keyword required-vals))
+        all-param-names (keys properties)
+        required (filterv #(required-set %) all-param-names)
+        optional (filterv #(not (required-set %)) all-param-names)]
+    [(mapv name required) (mapv name optional)]))
+
+(defn- format-tool-with-params
+  "Format a tool as mcp__server__tool [required, optional?]"
+  [server-name tool]
+  (let [tool-name (:name tool)
+        [required optional] (extract-tool-params tool)]
+    (if (or (seq required) (seq optional))
+      (let [all-params (into required (map #(str % "?")) optional)]
+        (str "mcp__" (name server-name) "__" tool-name " [" (str/join ", " all-params) "]"))
+      (str "mcp__" (name server-name) "__" tool-name))))
+
 (defn inject-tools-into-messages
   "Inject MCP tools directory into messages.
    If pre-discovered-tools map provided (server-name -> [tools]), use those;
@@ -116,30 +139,26 @@
                              tool-names (:tools server-config)]
                          (if (or server-url cmd)
                            (let [discovered (get pre-discovered-tools server-name)
-                                 tools (if (and pre-discovered-tools discovered)
-                                         (map :name discovered)
-                                         (map name tool-names))
-                                 tools (filter some? tools)
-                                 tool-str (str/join ", " tools)]
+                                 tools (if (and pre-discovered-tools (seq discovered))
+                                         discovered
+                                         (mapv (fn [t] {:name (name t)}) tool-names))
+                                 tools (filter #(some? (:name %)) tools)
+                                 formatted (map #(format-tool-with-params server-name %) tools)
+                                 tool-str (str/join ", " formatted)]
                              (if (seq tools)
                                (conj lines (str "- mcp__" (name server-name) ": " tool-str))
                                lines))
                            lines)))
                      []
                      servers)
-         directory-text (str "## Remote Capabilities (Injected)\n"
-                             "You have access to namespaced tools (prefix: mcp__).\n\n"
-                             "### Remote Directory:\n"
+         directory-text (str "## Remote Tools (MCP)\n"
+                             "You have access to namespaced MCP tools. Full schemas available via `get_tool_schema(server, tool)` if needed.\n\n"
+                             "### Available:\n"
                              (str/join "\n" tool-lines)
-                             "\n\n### CALL PROTOCOL:\n"
-                             "1. IDENTIFY tool in the directory above.\n"
-                             "2. DISCOVER: Call `get_tool_schema(server, tool)` to get parameters.\n"
-                             "3. EXECUTE: Call `mcp__[server]__[tool](...)` with the discovered parameters.\n\n"
-                             "DO NOT guess parameters for mcp__ tools. You MUST discover them first via `get_tool_schema`.\n\n"
-                             "### Native Tools:\n"
-                             "- clojure-eval: Evaluate Clojure code. Args: {:code \"clojure-expression\"}.\n"
-                             "  Use for computations, data transformations, reading app state.\n"
-                             "  Returns result as string. Use pr-str for data structures.\n"
+                             "\n\n### Usage:\n"
+                             "Call tools using full name: mcp__server__tool {:key \"value\"}\n\n"
+                             "### Native:\n"
+                             "- clojure-eval: Evaluate Clojure. Args: {:code \"...\"}\n"
                              "  Example: {:code \"(vec (range 5))\"} => \"[0 1 2 3 4]\"")
          system-msg {:role "system" :content directory-text}]
      (cons system-msg messages))))
