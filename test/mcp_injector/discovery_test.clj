@@ -48,11 +48,10 @@
     (mcp/clear-tool-cache!)
     (test-llm/clear-responses *test-llm*)
 
-    ;; Turn 1: LLM sees directory and asks for schema
+    ;; Turn 1: LLM sees directory and asks for schema (using NEW prefixed format)
     (test-llm/set-tool-call-response *test-llm*
                                      [{:name "get_tool_schema"
-                                       :arguments {:server "stripe"
-                                                   :tool "retrieve_customer"}}])
+                                       :arguments {:tool "mcp__stripe__retrieve_customer"}}])
 
     ;; Turn 2: LLM receives schema and makes the actual call
     (test-llm/set-tool-call-response *test-llm*
@@ -74,17 +73,11 @@
           requests @(:received-requests *test-llm*)
           first-req (first requests)
           last-req (last requests)
-          ;; Get all tool messages from the last request history
           tool-msgs (filter #(= "tool" (:role %)) (:messages last-req))]
 
       (is (= 200 (:status response)))
-      ;; Check that directory was injected
       (is (str/includes? (get-in first-req [:messages 0 :content]) "mcp__stripe"))
-
-      ;; Check that get_tool_schema was available
       (is (some (fn [t] (= "get_tool_schema" (get-in t [:function :name]))) (get-in first-req [:tools])))
-
-      ;; Check tool call content - at least ONE tool message should contain the result
       (is (some (fn [m] (str/includes? (:content m) "customer@example.com")) tool-msgs)))))
 
 (deftest tool-discovery-filtering-nil-shows-all
@@ -219,3 +212,61 @@
           (core/stop-server injector)
           (test-llm/stop-server llm-server)
           (test-mcp/stop-server mcp-server))))))
+
+;; Unified Prefixed Tool Names Tests
+
+(deftest test-get-tool-schema-accepts-prefixed-name
+  (testing "get_tool_schema should accept prefixed tool name format mcp__server__tool"
+    (mcp/clear-tool-cache!)
+    (test-llm/clear-responses *test-llm*)
+    (test-llm/set-tool-call-response *test-llm*
+                                     [{:name "get_tool_schema"
+                                       :arguments {:tool "mcp__stripe__retrieve_customer"}}])
+    (test-llm/set-tool-call-response *test-llm*
+                                     [{:name "mcp__stripe__retrieve_customer"
+                                       :arguments {:customer_id "cus_123"}}])
+    (test-llm/set-next-response *test-llm*
+                                {:role "assistant"
+                                 :content "Found customer"})
+    (let [response @(http/post (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                               {:body (json/generate-string
+                                       {:model "gpt-4o-mini"
+                                        :messages [{:role "user" :content "Get customer info"}]
+                                        :stream false})
+                                :headers {"Content-Type" "application/json"}})]
+      (is (= 200 (:status response))))))
+
+(deftest test-system-prompt-shows-prefixed-get-schema-format
+  (testing "System prompt should show get_tool_schema with prefixed format"
+    (mcp/clear-tool-cache!)
+    (test-llm/clear-responses *test-llm*)
+    (test-llm/set-next-response *test-llm* {:role "assistant" :content "ok"})
+    (let [response @(http/post (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                               {:body (json/generate-string
+                                       {:model "gpt-4o"
+                                        :messages [{:role "user" :content "test"}]})
+                                :headers {"Content-Type" "application/json"}})
+          first-req (first @(:received-requests *test-llm*))
+          content (get-in first-req [:messages 0 :content])]
+      (is (= 200 (:status response)))
+      (is (str/includes? content "get_tool_schema {:tool"))
+      (is (str/includes? content "mcp__stripe"))
+      (is (not (str/includes? content ":server"))))))
+
+(deftest test-direct-tool-call-without-schema-still-works
+  (testing "Direct tool call without get_tool_schema should auto-discover and work"
+    (mcp/clear-tool-cache!)
+    (test-llm/clear-responses *test-llm*)
+    (test-llm/set-tool-call-response *test-llm*
+                                     [{:name "mcp__stripe__retrieve_customer"
+                                       :arguments {:customer_id "cus_123"}}])
+    (test-llm/set-next-response *test-llm*
+                                {:role "assistant"
+                                 :content "Found customer"})
+    (let [response @(http/post (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                               {:body (json/generate-string
+                                       {:model "gpt-4o-mini"
+                                        :messages [{:role "user" :content "Get customer cus_123"}]
+                                        :stream false})
+                                :headers {"Content-Type" "application/json"}})]
+      (is (= 200 (:status response))))))

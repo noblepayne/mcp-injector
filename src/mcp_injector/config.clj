@@ -88,11 +88,9 @@
     :function {:name "get_tool_schema"
                :description "Fetch the full JSON schema for a specific MCP tool to understand its parameters."
                :parameters {:type "object"
-                            :properties {:server {:type "string"
-                                                  :description "The name of the MCP server (e.g., 'stripe')"}
-                                         :tool {:type "string"
-                                                :description "The name of the tool (e.g., 'retrieve_customer')"}}
-                            :required ["server" "tool"]}}}
+                            :properties {:tool {:type "string"
+                                                :description "Full tool name with mcp__ prefix (e.g., 'mcp__stripe__retrieve_customer')"}}
+                            :required ["tool"]}}}
    {:type "function"
     :function {:name "clojure-eval"
                :description "Evaluate Clojure code in the local REPL. WARNING: Full Clojure access - use with care. Returns the result as a string."
@@ -152,11 +150,12 @@
                      []
                      servers)
          directory-text (str "## Remote Tools (MCP)\n"
-                             "You have access to namespaced MCP tools. Full schemas available via `get_tool_schema(server, tool)` if needed.\n\n"
+                             "You have access to namespaced MCP tools.\n\n"
                              "### Available:\n"
                              (str/join "\n" tool-lines)
                              "\n\n### Usage:\n"
-                             "Call tools using full name: mcp__server__tool {:key \"value\"}\n\n"
+                             "Get schema: get_tool_schema {:tool \"mcp__server__tool\"}\n"
+                             "Call tool: mcp__server__tool {:key \"value\"}\n\n"
                              "### Native:\n"
                              "- clojure-eval: Evaluate Clojure. Args: {:code \"...\"}\n"
                              "  Example: {:code \"(vec (range 5))\"} => \"[0 1 2 3 4]\"")

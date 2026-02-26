@@ -101,17 +101,21 @@
 (defn- execute-tool [full-name args mcp-servers discovered-this-loop]
   (cond
     (= full-name "get_tool_schema")
-    (let [s-name (:server args)
-          t-name (:tool args)
-          s-config (get-in mcp-servers [:servers (keyword s-name)])]
-      (if s-config
+    (let [full-tool-name (:tool args)
+          ;; Parse prefixed name: mcp__server__tool -> [server tool]
+          [s-name t-name] (if (and full-tool-name (str/includes? full-tool-name "__"))
+                            (let [idx (str/last-index-of full-tool-name "__")]
+                              [(subs full-tool-name 3 idx) (subs full-tool-name (+ idx 2))])
+                            [nil nil])
+          s-config (when s-name (get-in mcp-servers [:servers (keyword s-name)]))]
+      (if (and s-name s-config t-name)
         (let [schema (mcp/get-tool-schema (name s-name) s-config t-name)]
           (if (:error schema)
             schema
-            (let [mcp-name (str "mcp__" s-name "__" t-name)]
-              (swap! discovered-this-loop assoc mcp-name schema)
+            (do
+              (swap! discovered-this-loop assoc full-tool-name schema)
               schema)))
-        {:error (str "Server not found: " s-name)}))
+        {:error (str "Invalid tool name. Use format: mcp__server__tool (e.g., mcp__stripe__retrieve_customer). Got: " full-tool-name)}))
 
     (= full-name "clojure-eval")
     (try
@@ -140,7 +144,7 @@
           (let [[_ s-name-auto real-t-auto] (str/split full-name #"__" 3)
                 s-conf-auto (get-in mcp-servers [:servers (keyword s-name-auto)])]
             (mcp/call-tool (name s-name-auto) s-conf-auto real-t-auto args))
-          {:error (str "Protocol Violation: Parameters for '" full-name "' are unknown. You MUST call 'get_tool_schema' first to discover them.")})))
+          {:error (str "Unknown tool: " full-name ". Use get_tool_schema with full prefixed name first.")})))
 
     :else {:error (str "Unknown tool: " full-name)}))
 
