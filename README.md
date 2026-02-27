@@ -137,6 +137,44 @@ Custom headers can be added to MCP server requests (useful for auth):
 
 User headers are merged with mandatory protocol headers, with user headers taking precedence.
 
+#### NixOS Deployment
+
+Deploy with the NixOS module:
+
+```nix
+services.mcp-injector = {
+  enable = true;
+  port = 8088;
+  llmUrl = "http://localhost:8080";
+  
+  # Optional: secrets from environment file
+  environmentFile = "/etc/secrets/mcp-injector.env";
+  
+  mcpServers = {
+    home-assistant = {
+      url = "http://192.168.1.1:8123/api/mcp";
+      # Use env var from environmentFile
+      env = {
+        TOKEN = { env = "HA_TOKEN"; prefix = "Bearer "; };
+      };
+    };
+    stripe = {
+      url = "http://localhost:3001/mcp";
+      headers = {
+        Authorization = "Bearer sk-xxx";
+      };
+    };
+  };
+};
+```
+
+Create `/etc/secrets/mcp-injector.env`:
+```
+HA_TOKEN=your-long-lived-access-token
+```
+
+The `environmentFile` option loads secrets from a file without exposing them in `/proc` or the Nix store.
+
 ### Usage
 
 Once running, mcp-injector accepts OpenAI-compatible requests:
