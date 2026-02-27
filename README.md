@@ -169,6 +169,7 @@ services.mcp-injector = {
 ```
 
 Create `/etc/secrets/mcp-injector.env`:
+
 ```
 HA_TOKEN=your-long-lived-access-token
 ```

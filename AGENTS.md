@@ -223,7 +223,9 @@ cljfmt fix src/ test/
 cljfmt check src/ test/
 
 # Format Markdown
-mdformat NIX_USAGE.md situated-agent-runtime-spec.md
+nix run nixpkgs#mdformat -- README.md docs/*.md
+# Or for specific files
+nix run nixpkgs#mdformat -- NIX_USAGE.md situated-agent-runtime-spec.md
 ```
 
 ## Code Style Guidelines
@@ -311,6 +313,8 @@ test/
     test_mcp_server.clj   # Real MCP server for testing
     test_llm_server.clj # Real LLM gateway for testing
     integration_test.clj  # Full stack integration tests
+docs/
+  mcp-injector-config-review.md  # Internal config recommendations (update when adding features!)
 bb.edn                    # Babashka config
 mcp-servers.edn           # MCP server configurations
 ```

@@ -1,22 +1,23 @@
 # MCP Server Configuration Review & Recommendations
 
-**Date:** 2026-02-25  
-**Author:** J.O.E. (AI Agent)  
+**Date:** 2026-02-25\
+**Author:** J.O.E. (AI Agent)\
 **Purpose:** Internal report for lead dev agent on mcp-injector configuration improvements
 
----
+______________________________________________________________________
 
 ## Executive Summary
 
 This report analyzes the current mcp-injector configuration against industry best practices from OpenCode and Claude Code, and proposes improvements for consideration.
 
 **Current Stats:**
+
 - Model: `brain` (virtual chain with fallback)
 - Total Requests: 641
 - Total Tokens: 33.4M input / 114K output
 - Port: 8089
 
----
+______________________________________________________________________
 
 ## Current Configuration Overview
 
@@ -56,17 +57,17 @@ services.mcp-injector = {
 };
 ```
 
----
+______________________________________________________________________
 
 ## Strengths of Current Setup
 
 1. **Virtual Model Chains with Fallback** — Intelligent retry logic when free models fail
-2. **Cooldown + 429 Handling** — Prevents hammering rate-limited APIs
-3. **Multiple Provider Diversity** — Mix of Zen, OpenRouter, NVIDIA endpoints
-4. **Paid Fallback** — Ensures availability when free tier exhausts
-5. **Multiple MCP Servers** — Auphonic, Nextcloud, FreshRSS, Art19 for podcast production
+1. **Cooldown + 429 Handling** — Prevents hammering rate-limited APIs
+1. **Multiple Provider Diversity** — Mix of Zen, OpenRouter, NVIDIA endpoints
+1. **Paid Fallback** — Ensures availability when free tier exhausts
+1. **Multiple MCP Servers** — Auphonic, Nextcloud, FreshRSS, Art19 for podcast production
 
----
+______________________________________________________________________
 
 ## Recommendations
 
@@ -89,7 +90,7 @@ servers = {
 };
 ```
 
----
+______________________________________________________________________
 
 ### 2. Tool Scoping (Per-Model MCP Selection)
 
@@ -110,7 +111,7 @@ virtual-models = {
 };
 ```
 
----
+______________________________________________________________________
 
 ### 3. Enhanced Authentication Headers
 
@@ -127,7 +128,7 @@ nextcloud = {
 };
 ```
 
----
+______________________________________________________________________
 
 ### 4. Dynamic Tool Reload Support
 
@@ -135,7 +136,7 @@ nextcloud = {
 
 **Recommendation:** Add support for dynamic tool updates when MCP servers change their available tools/prompts/resources.
 
----
+______________________________________________________________________
 
 ### 5. Config Structure Clarification
 
@@ -157,7 +158,7 @@ services.mcp-injector = {
 };
 ```
 
----
+______________________________________________________________________
 
 ### 6. MCP Server Health Monitoring
 
@@ -176,7 +177,7 @@ services.mcp-injector = {
 };
 ```
 
----
+______________________________________________________________________
 
 ### 7. Request Logging Enhancements
 
@@ -199,7 +200,7 @@ services.mcp-injector = {
 }
 ```
 
----
+______________________________________________________________________
 
 ## Priority Recommendations
 
@@ -209,22 +210,43 @@ services.mcp-injector = {
 | High | Config structure cleanup | Medium | Maintainability | Not implemented |
 | Medium | Tool scoping per model | Medium | Token savings | Not implemented |
 | Medium | Enhanced auth headers | Low | Security | **✅ Implemented** |
+| Medium | Per-server credential files | Low | Security | Not implemented |
 | Low | Dynamic tool reload | High | Flexibility | Not implemented |
 | Low | Health monitoring | Medium | Observability | Not implemented |
 | Low | Dynamic env resolution | Low | Flexibility | **✅ Implemented** |
 
----
+______________________________________________________________________
 
 ## Conclusion
 
 The current mcp-injector configuration is solid and well-thought-out. The virtual model chain with fallback is a smart approach. The main areas for improvement are:
 
 1. **Explicit timeouts** for MCP servers
-2. **Cleaner config structure** that separates virtual model routing from MCP tool hosting
-3. **Per-model MCP scoping** to reduce unnecessary token overhead
+1. **Cleaner config structure** that separates virtual model routing from MCP tool hosting
+1. **Per-model MCP scoping** to reduce unnecessary token overhead
 
 These changes would improve reliability, maintainability, and cost efficiency without major architectural changes.
 
----
+______________________________________________________________________
+
+## Future: Per-Server Credential Files
+
+Currently, all environment variables from `environmentFile` are available to all MCP servers. For better security, we should support per-server credential scoping:
+
+```clojure
+;; Per-server credential file
+{:servers 
+  {:stripe {:creds "/etc/secrets/stripe.env"}
+   :aws {:creds "/etc/secrets/aws.env"}}}
+
+;; Or scoped env vars (only inject specific vars to specific servers)
+{:servers
+  {:stripe {:env-from ["STRIPE_SECRET_KEY"]}
+   :postgres {:env-from ["DB_PASSWORD"]}}}
+```
+
+This prevents credential leakage between MCP servers and follows least-privilege principles.
+
+______________________________________________________________________
 
 *Report generated by J.O.E. - 2026-02-25*
