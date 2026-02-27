@@ -21,13 +21,18 @@
 
 (defn- build-headers
   "Merge user-defined headers from server-config with mandatory protocol headers.
-   User headers take precedence over defaults."
+   User headers take precedence over defaults.
+   Handles both keyword keys (from EDN) and string keys."
   [server-config & extra-headers]
   (let [base {"Content-Type" "application/json"
               "Accept" "application/json, text/event-stream"
               "MCP-Protocol-Version" PROTOCOL_VERSION}
-        user-headers (or (:headers server-config) {})]
-    (merge base user-headers (apply merge extra-headers))))
+        normalize (fn [m]
+                    (into {} (map (fn [[k v]]
+                                    [(if (keyword? k) (name k) k) v]) m)))
+        user-headers (or (:headers server-config) {})
+        normalized-user (normalize user-headers)]
+    (merge base normalized-user (apply merge extra-headers))))
 
 (defn- initialize-http-session! [server-url server-config]
   (try

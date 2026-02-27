@@ -140,12 +140,20 @@
                   stripe = {
                     url = "http://localhost:3001/mcp";
                     tools = ["retrieve_customer" "list_charges"];
-                    inject = "lazy";
                   };
-                  postgres = {
-                    url = "http://localhost:3002/mcp";
-                    tools = ["query" "execute"];
-                    inject = "lazy";
+                  home-assistant = {
+                    url = "http://192.168.1.100:8123/api/mcp";
+                    headers = {
+                      Authorization = "Bearer your-token-here";
+                    };
+                  };
+                  local-tool = {
+                    cmd = ["node" "/path/to/server.js"];
+                    env = {
+                      API_KEY = "secret";
+                      DYNAMIC = { env = "MY_VAR"; prefix = "prefix-"; };
+                    };
+                    cwd = "/path/to/project";
                   };
                 }
               '';
