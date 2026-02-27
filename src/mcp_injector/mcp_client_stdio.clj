@@ -43,7 +43,7 @@
            (merge
             {:in :pipe :out :pipe :err :inherit}
             (when env {:env (into {} (map (fn [[k v]] [(name k) (str v)]) env))})
-            (when cwd {:dir cwd})))
+            (when cwd {:dir (str cwd)})))
         out-writer (PrintWriter. (OutputStreamWriter. (:in p)) true)
         in-reader (BufferedReader. (InputStreamReader. (:out p)))
         pending-requests (atom {})

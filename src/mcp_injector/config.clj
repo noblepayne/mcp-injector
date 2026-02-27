@@ -40,10 +40,53 @@
    :log-level (env-var "MCP_INJECTOR_LOG_LEVEL" (:log-level default-config))
    :timeout-ms (parse-int (env-var "MCP_INJECTOR_TIMEOUT_MS") (:timeout-ms default-config))})
 
+(defn get-env [name]
+  (System/getenv name))
+
+(defn- resolve-value
+  "Resolve a potentially dynamic value.
+   If value is a map with :env, look up environment variable.
+   Supports :prefix and :suffix."
+  [v]
+  (if (and (map? v) (:env v))
+    (let [env-name (:env v)]
+      (if (or (string? env-name) (keyword? env-name))
+        (let [prefix (:prefix v "")
+              suffix (:suffix v "")
+              env-val (get-env (if (keyword? env-name) (name env-name) env-name))]
+          (if env-val
+            (str prefix env-val suffix)
+            (do
+              (println (str "Warning: Environment variable " env-name " not set."))
+              nil)))
+        v))
+    v))
+
+(defn resolve-server-config
+  "Recursively resolve dynamic values in a server configuration map.
+   Uses post-order traversal: children first, then parent."
+  [m]
+  (let [resolve-all (fn resolve-all [x]
+                      (cond
+                        (map? x)
+                        (let [resolved (into {} (map (fn [[k v]] [k (resolve-all v)]) x))]
+                          (if (contains? resolved :env)
+                            (resolve-value resolved)
+                            resolved))
+
+                        (vector? x)
+                        (mapv resolve-all x)
+
+                        :else x))]
+    (resolve-all m)))
+
 (defn load-mcp-servers [config-path]
   (if-let [file (io/file config-path)]
     (if (.exists file)
-      (keywordize-keys (edn/read-string (slurp file)))
+      (let [raw-config (keywordize-keys (edn/read-string (slurp file)))]
+        (update raw-config :servers
+                (fn [servers]
+                  (into {} (map (fn [[k v]] [k (resolve-server-config v)]) servers)))))
       {:servers {} :llm-gateway {:url "http://localhost:8080" :fallbacks []}})
     {:servers {} :llm-gateway {:url "http://localhost:8080" :fallbacks []}}))
 

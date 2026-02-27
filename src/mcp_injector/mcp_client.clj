@@ -19,7 +19,17 @@
              :message message
              :data data})))
 
-(defn- initialize-http-session! [server-url]
+(defn- build-headers
+  "Merge user-defined headers from server-config with mandatory protocol headers.
+   User headers take precedence over defaults."
+  [server-config & extra-headers]
+  (let [base {"Content-Type" "application/json"
+              "Accept" "application/json, text/event-stream"
+              "MCP-Protocol-Version" PROTOCOL_VERSION}
+        user-headers (or (:headers server-config) {})]
+    (merge base user-headers (apply merge extra-headers))))
+
+(defn- initialize-http-session! [server-url server-config]
   (try
     (let [init-body {:jsonrpc "2.0" :id "init" :method "initialize"
                      :params {:protocolVersion PROTOCOL_VERSION
@@ -29,9 +39,7 @@
           init-resp (http/post server-url
                                {:body (json/generate-string init-body)
                                 :client http-client
-                                :headers {"Content-Type" "application/json"
-                                          "Accept" "application/json, text/event-stream"
-                                          "MCP-Protocol-Version" PROTOCOL_VERSION}})
+                                :headers (build-headers server-config)})
           status (:status init-resp)]
       (if (= 200 status)
         (let [headers (:headers init-resp)
@@ -43,15 +51,11 @@
           (if session-id
             (do
               (swap! http-sessions assoc server-url session-id)
-              ;; Send initialized notification (no ID per spec)
               (try
                 (http/post server-url
                            {:body (json/generate-string {:jsonrpc "2.0" :method "notifications/initialized" :params {}})
                             :client http-client
-                            :headers {"Mcp-Session-Id" session-id
-                                      "Content-Type" "application/json"
-                                      "Accept" "application/json, text/event-stream"
-                                      "MCP-Protocol-Version" PROTOCOL_VERSION}})
+                            :headers (build-headers server-config {"Mcp-Session-Id" session-id})})
                 (catch Exception e
                   (log-request "debug" "Failed to send initialized notification (ignoring)" {:error (.getMessage e)})))
               session-id)
@@ -61,9 +65,12 @@
       (log-request "debug" "Session initialization failed" {:url server-url :error (.getMessage e)})
       (throw e))))
 
-(defn- get-http-session! [server-url]
-  (or (get @http-sessions server-url)
-      (initialize-http-session! server-url)))
+(defn- get-http-session! [server-url server-config]
+  (if-let [sid (get @http-sessions server-url)]
+    sid
+    (locking http-sessions
+      (or (get @http-sessions server-url)
+          (initialize-http-session! server-url server-config)))))
 
 (defn- parse-mcp-body [resp]
   (let [ct (or (get-in resp [:headers "content-type"])
@@ -79,14 +86,11 @@
            first)
       (json/parse-string (:body resp) true))))
 
-(defn- call-http [server-url method params]
+(defn- call-http [server-url server-config method params]
   (try
-    (let [sid (get-http-session! server-url)
+    (let [sid (get-http-session! server-url server-config)
           resp (http/post server-url
-                          {:headers {"Mcp-Session-Id" sid
-                                     "Content-Type" "application/json"
-                                     "Accept" "application/json, text/event-stream"
-                                     "MCP-Protocol-Version" PROTOCOL_VERSION}
+                          {:headers (build-headers server-config {"Mcp-Session-Id" sid})
                            :body (json/generate-string
                                   {:jsonrpc "2.0"
                                    :id (str (java.util.UUID/randomUUID))
@@ -100,7 +104,7 @@
         (= 200 status) body
         (and sid (#{400 401 404} status))
         (do (swap! http-sessions dissoc server-url)
-            (call-http server-url method params))
+            (call-http server-url server-config method params))
         :else body))
     (catch Exception e
       (let [msg (.getMessage e)]
@@ -112,7 +116,7 @@
                 (when (and (string? server-id) (str/starts-with? server-id "http")) server-id))]
     (cond
       (:cmd server-config) (stdio/list-tools server-id server-config)
-      url (let [resp (call-http url "tools/list" {})]
+      url (let [resp (call-http url server-config "tools/list" {})]
             (if (:error resp)
               resp
               (get-in resp [:result :tools])))
@@ -124,7 +128,7 @@
     (log-request "info" "Calling Tool" {:server server-id :tool tool-name})
     (cond
       (:cmd server-config) (stdio/call-tool server-id server-config tool-name arguments)
-      url (let [resp (call-http url "tools/call" {:name tool-name :arguments arguments})]
+      url (let [resp (call-http url server-config "tools/call" {:name tool-name :arguments arguments})]
             (cond
               (:error resp) resp
               (:result resp) (get-in resp [:result :content])
