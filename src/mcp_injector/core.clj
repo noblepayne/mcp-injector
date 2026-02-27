@@ -105,7 +105,7 @@
           ;; Parse prefixed name: mcp__server__tool -> [server tool]
           [s-name t-name] (if (and full-tool-name (str/includes? full-tool-name "__"))
                             (let [idx (str/last-index-of full-tool-name "__")]
-                              [(subs full-tool-name 3 idx) (subs full-tool-name (+ idx 2))])
+                              [(subs full-tool-name 5 idx) (subs full-tool-name (+ idx 2))])
                             [nil nil])
           s-config (when s-name (get-in mcp-servers [:servers (keyword s-name)]))]
       (if (and s-name s-config t-name)

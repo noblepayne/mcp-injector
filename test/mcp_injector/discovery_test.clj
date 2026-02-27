@@ -233,8 +233,11 @@
                                        {:model "gpt-4o-mini"
                                         :messages [{:role "user" :content "Get customer info"}]
                                         :stream false})
-                                :headers {"Content-Type" "application/json"}})]
-      (is (= 200 (:status response))))))
+                                :headers {"Content-Type" "application/json"}})
+          body (json/parse-string (:body response) true)
+          last-msg (get-in body [:choices 0 :message :content])]
+      (is (= 200 (:status response)))
+      (is (str/includes? (or last-msg "") "Found customer")))))
 
 (deftest test-system-prompt-shows-prefixed-get-schema-format
   (testing "System prompt should show get_tool_schema with prefixed format"
