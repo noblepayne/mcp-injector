@@ -69,14 +69,24 @@ Create `mcp-servers.edn`:
 {:servers
   {:stripe
    {:url "http://localhost:3001/mcp"
-    :tools ["retrieve_customer" "list_charges"]}
+    :tools ["retrieve_customer" "list_charges"]
+    ;; Custom HTTP headers (merged with protocol headers)
+    :headers {"Authorization" "Bearer sk-xxx"
+              "X-Custom-Header" "value"}}
+
    :postgres
    {:url "http://localhost:3002/mcp"
     :tools ["query" "execute"]}
+
    :local-tool
    {:cmd ["node" "/path/to/server.js"]
+    ;; Static env vars
     :env {"API_KEY" "sk_test_..."}
-    :cwd "/path/to/project"}}
+    ;; Dynamic env vars from environment (supports :prefix and :suffix)
+    :env {"DEBUG" {:env "DEBUG_MODE" :prefix "true-" :suffix "-enabled"}
+          "PATH" {:env "PATH"}}
+    ;; Working directory (static or dynamic via {:env "VAR"})
+    :cwd "/path/to/project"}}}
 
  ;; LLM gateway with virtual models and fallbacks
  :llm-gateway
@@ -97,6 +107,35 @@ export MCP_INJECTOR_LLM_URL=http://localhost:8080
 export MCP_INJECTOR_MCP_CONFIG=./mcp-servers.edn
 export MCP_INJECTOR_MAX_ITERATIONS=10
 ```
+
+#### Dynamic Configuration
+
+Environment variables and working directory can reference the system environment:
+
+```clojure
+{:env {"DEBUG" {:env "DEBUG_MODE" :prefix "true-" :suffix "-enabled"}
+       "TOKEN" {:env "API_TOKEN" :prefix "Bearer "}
+       "PATH" {:env "PATH"}
+       "HOME" {:env "HOME"}}
+ :cwd {:env "PWD"}}
+```
+
+- `{:env "VAR"}` - Read from system environment
+- `{:env "VAR" :prefix "prefix-"}` - Add prefix to value
+- `{:env "VAR" :suffix "-suffix"}` - Add suffix to value
+- Combines: `{:env "TOKEN" :prefix "Bearer "}` → `Bearer sk-xxx`
+
+#### HTTP Headers
+
+Custom headers can be added to MCP server requests (useful for auth):
+
+```clojure
+{:url "http://localhost:3000/mcp"
+ :headers {"Authorization" "Bearer sk-xxx"
+           "X-Custom-Header" "value"}}
+```
+
+User headers are merged with mandatory protocol headers, with user headers taking precedence.
 
 ### Usage
 
@@ -209,6 +248,8 @@ See `AGENTS.md` for detailed guidelines.
 **Implemented:**
 
 - ✅ **Multi-transport MCP** - Support for both HTTP and STDIO (local process) MCP servers
+- ✅ **Per-server HTTP headers** - Custom headers for MCP server authentication
+- ✅ **Dynamic env resolution** - Environment variables with prefix/suffix support
 - ✅ **Control & Observability API** - Unified `/api/v1` for state inspection and resets
 - ✅ HTTP server with OpenAI-compatible endpoint
 - ✅ Virtual model chains with automatic failover

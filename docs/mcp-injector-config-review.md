@@ -203,14 +203,15 @@ services.mcp-injector = {
 
 ## Priority Recommendations
 
-| Priority | Item | Effort | Impact |
-|----------|------|--------|--------|
-| High | Per-server timeouts | Low | Reliability |
-| High | Config structure cleanup | Medium | Maintainability |
-| Medium | Tool scoping per model | Medium | Token savings |
-| Medium | Enhanced auth headers | Low | Security |
-| Low | Dynamic tool reload | High | Flexibility |
-| Low | Health monitoring | Medium | Observability |
+| Priority | Item | Effort | Impact | Status |
+|----------|------|--------|--------|--------|
+| High | Per-server timeouts | Low | Reliability | Not implemented |
+| High | Config structure cleanup | Medium | Maintainability | Not implemented |
+| Medium | Tool scoping per model | Medium | Token savings | Not implemented |
+| Medium | Enhanced auth headers | Low | Security | **✅ Implemented** |
+| Low | Dynamic tool reload | High | Flexibility | Not implemented |
+| Low | Health monitoring | Medium | Observability | Not implemented |
+| Low | Dynamic env resolution | Low | Flexibility | **✅ Implemented** |
 
 ---
 
