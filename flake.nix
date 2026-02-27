@@ -194,6 +194,13 @@
               default = false;
               description = "Open firewall port for mcp-injector";
             };
+
+            environmentFile = mkOption {
+              type = types.nullOr types.path;
+              default = null;
+              description = "Path to environment file containing secrets (e.g. /etc/secrets/mcp-injector.env)";
+              example = "/etc/secrets/mcp-injector.env";
+            };
           };
 
           config = mkIf cfg.enable {
@@ -230,6 +237,7 @@
                 Restart = "on-failure";
                 RestartSec = "5s";
                 StateDirectory = "mcp-injector";
+                EnvironmentFile = mkIf (cfg.environmentFile != null) cfg.environmentFile;
 
                 NoNewPrivileges = true;
                 PrivateTmp = true;
