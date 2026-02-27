@@ -64,7 +64,9 @@
                 (catch Exception e
                   (log-request "debug" "Failed to send initialized notification (ignoring)" {:error (.getMessage e)})))
               session-id)
-            (throw (ex-info "No Mcp-Session-Id header in initialize response" {:headers headers}))))
+            (do
+              (log-request "debug" "No session ID returned - using stateless mode" {:url server-url})
+              nil)))
         (throw (ex-info "Failed to initialize HTTP MCP session" {:status status :body (:body init-resp)}))))
     (catch Exception e
       (log-request "debug" "Session initialization failed" {:url server-url :error (.getMessage e)})
@@ -94,8 +96,9 @@
 (defn- call-http [server-url server-config method params]
   (try
     (let [sid (get-http-session! server-url server-config)
+          session-header (when sid {"Mcp-Session-Id" sid})
           resp (http/post server-url
-                          {:headers (build-headers server-config {"Mcp-Session-Id" sid})
+                          {:headers (build-headers server-config session-header)
                            :body (json/generate-string
                                   {:jsonrpc "2.0"
                                    :id (str (java.util.UUID/randomUUID))
