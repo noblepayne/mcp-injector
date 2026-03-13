@@ -12,12 +12,17 @@
 
 (def http-client (http/client {:version :http1.1}))
 
-(defn- log-request [level message data]
-  (println (json/generate-string
-            {:timestamp (str (java.time.Instant/now))
-             :level level
-             :message message
-             :data data})))
+(defn- log-request
+  ([level message data]
+   (log-request level message data nil))
+  ([level message data context]
+   (println (json/generate-string
+             (merge {:timestamp (str (java.time.Instant/now))
+                     :level level
+                     :message message
+                     :request-id (or (try @(resolve 'mcp-injector.core/*request-id*) (catch Exception _ nil)) "none")}
+                    context
+                    {:data data})))))
 
 (defn- build-headers
   "Merge user-defined headers from server-config with mandatory protocol headers.
@@ -40,7 +45,7 @@
                      :params {:protocolVersion PROTOCOL_VERSION
                               :capabilities {}
                               :clientInfo {:name "mcp-injector" :version "1.0.0"}}}
-          _ (log-request "debug" "Initializing HTTP MCP session" {:url server-url})
+          _ (log-request "debug" "Initializing HTTP MCP session" {:url server-url} {:server server-url})
           init-resp (http/post server-url
                                {:body (json/generate-string init-body)
                                 :client http-client
@@ -48,7 +53,7 @@
           status (:status init-resp)]
       (if (= 200 status)
         (let [headers (:headers init-resp)
-              _ (log-request "debug" "Received initialize headers" {:headers headers})
+              _ (log-request "debug" "Received initialize headers" {:headers headers} {:server server-url})
               session-id (or (get headers "mcp-session-id")
                              (get headers :mcp-session-id)
                              (get headers "Mcp-Session-Id")
@@ -62,14 +67,14 @@
                             :client http-client
                             :headers (build-headers server-config {"Mcp-Session-Id" session-id})})
                 (catch Exception e
-                  (log-request "debug" "Failed to send initialized notification (ignoring)" {:error (.getMessage e)})))
+                  (log-request "debug" "Failed to send initialized notification (ignoring)" {:error (.getMessage e)} {:server server-url})))
               session-id)
             (do
-              (log-request "debug" "No session ID returned - using stateless mode" {:url server-url})
+              (log-request "debug" "No session ID returned - using stateless mode" {:url server-url} {:server server-url})
               nil)))
         (throw (ex-info "Failed to initialize HTTP MCP session" {:status status :body (:body init-resp)}))))
     (catch Exception e
-      (log-request "debug" "Session initialization failed" {:url server-url :error (.getMessage e)})
+      (log-request "debug" "Session initialization failed" {:url server-url :error (.getMessage e)} {:server server-url})
       (throw e))))
 
 (defn- get-http-session! [server-url server-config]
@@ -116,7 +121,7 @@
         :else body))
     (catch Exception e
       (let [msg (.getMessage e)]
-        (log-request "debug" "HTTP call failed" {:url server-url :method method :error msg})
+        (log-request "debug" "HTTP call failed" {:url server-url :method method :error msg} {:server server-url})
         {:error msg}))))
 
 (defn list-tools [server-id server-config]
@@ -133,7 +138,7 @@
 (defn call-tool [server-id server-config tool-name arguments]
   (let [url (or (:url server-config)
                 (when (and (string? server-id) (str/starts-with? server-id "http")) server-id))]
-    (log-request "info" "Calling Tool" {:server server-id :tool tool-name})
+    (log-request "info" "Calling Tool" {:tool tool-name} {:server server-id})
     (cond
       (:cmd server-config) (stdio/call-tool server-id server-config tool-name arguments)
       url (let [resp (call-http url server-config "tools/call" {:name tool-name :arguments arguments})]
@@ -197,4 +202,5 @@
       (log-request "info" "Proactive warm-up complete"
                    {:successful success-count
                     :failed (- (count results) success-count)
-                    :details results}))))
+                    :details results}
+                   {}))))
