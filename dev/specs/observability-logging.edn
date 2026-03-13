@@ -1,0 +1,115 @@
+{:title "Enhanced Observability Logging"
+ :description "Add request correlation IDs, model info, and structured logging for better debugging and traceability"
+ :status :todo
+ :priority :high
+ :created "2026-03-13"
+ :tags [:observability :logging :debugging]
+
+ :problem-statement
+ "Current logging lacks observability for debugging production issues:
+  - No request correlation ID to trace errors to specific requests
+  - Model info often missing from log entries
+  - No way to correlate logs within a single request flow
+  - Errors don't include context needed to debug (what model, what endpoint, etc.)"
+
+ :acceptance-criteria
+ ["Every request gets a unique correlation ID (ULID) that's included in all logs for that request"
+  "All log entries include :model when the model is known"
+  "All log entries include :request-id for correlation"
+  "Errors include sufficient context: model, endpoint URL, request ID, error type"
+  "Structured JSON logging with consistent schema"
+  "Log entries include timestamp in ISO-8601 format with milliseconds"
+  "Request/response logging at HTTP boundaries (incoming request, outgoing to LLM, response to client)"
+  "Tool execution logging includes server name, tool name, success/failure"
+  "Virtual model chain logging shows which provider is being tried"
+  "Cooldown events are logged with provider name and duration"]
+
+ :current-state
+ "Current log format:
+  {:timestamp \"2026-03-13T10:30:00Z\"
+   :level \"info\"
+   :message \"Chat Completion Started\"
+   :data {:model \"gpt-4o-mini\" :stream true}}
+
+  Issues:
+  - No request-id to correlate logs
+  - Some log points missing :model
+  - No :endpoint or :url context in errors
+  - Tool execution logged but not tied to specific request"]
+
+ :proposed-state
+ "Enhanced log format with correlation:
+  {:timestamp \"2026-03-13T10:30:00.123Z\"
+   :level \"info\"
+   :message \"Chat Completion Started\"
+   :request-id \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"
+   :model \"gpt-4o-mini\"
+   :data {:stream true
+          :message-count 2
+          :tools-injected [\"stripe.retrieve_customer\"]}}
+
+  Error with full context:
+  {:timestamp \"2026-03-13T10:30:00.456Z\"
+   :level \"error\"
+   :message \"LLM request failed\"
+   :request-id \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"
+   :model \"gpt-4o-mini\"
+   :endpoint \"http://localhost:8080/v1/chat/completions\"
+   :data {:status 429
+          :error \"Rate limit exceeded\"
+          :retry-after-ms nil}}"
+
+ :edge-cases
+ ["What happens when request body is unparseable? Still generate request-id?"
+  "What if LLM URL is missing? Log with placeholder"
+  "How to handle streaming vs non-streaming in logs?"
+  "What if max-iterations reached? Log as warning, not error"
+  "Virtual model fallback: log each provider attempt"]
+
+ :implementation-notes
+ ["Use ULID for request IDs - sortable, embedded timestamp"
+  "Add request-id to all log calls via thread-local or passing through"
+  "For agent-loop: pass request-id through all recursive calls"
+  "For HTTP errors: include endpoint URL and status code"
+  "Virtual model chain: log each provider attempt with :provider field"]
+
+ :depends-on []
+ :phases
+ [{:phase 1
+   :description "Core logging infrastructure"
+   :tasks
+   ["Add request-id generation at HTTP handler entry"
+    "Update log-request to include request-id, model, endpoint"
+    "Add request-id to all existing log points in core.clj"]}
+
+  {:phase 2
+   :description "Agent loop logging"
+   :tasks
+   ["Pass request-id through agent-loop function"
+    "Log each iteration with request-id"
+    "Log tool execution with server name and tool name"
+    "Log virtual model chain attempts with provider name"]}
+
+  {:phase 3
+   :description "MCP client logging"
+   :tasks
+   ["Update mcp_client.clj logging to include request-id"
+    "Update mcp_client_stdio.clj logging"
+    "Ensure all MCP errors include server context"]}
+
+  {:phase 4
+   :description "Testing and verification"
+   :tasks
+   ["Write integration test that verifies request-id in all logs"
+    "Test error scenarios include full context"
+    "Verify no performance regression from extra logging"}]}
+
+ :tests
+ [{:name "request-id-generated-for-every-request"
+   :description "Every incoming request gets a unique request-id"}
+  {:name "error-includes-model-and-endpoint"
+   :description "Errors include model, endpoint URL, and request-id"}
+  {:name "tool-execution-logged-with-context"
+   :description "Tool calls include server name, tool name, success/failure"}
+  {:name "virtual-model-fallback-logged"
+   :description "Each provider attempt in chain is logged"}]}
