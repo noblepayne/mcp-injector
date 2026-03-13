@@ -1,0 +1,211 @@
+{
+  config,
+  pkgs,
+  lib,
+  ...
+}: {
+  # Override mcp-injector sandbox for workspace file access
+  systemd.services.mcp-injector = {
+    environment = {
+      HOME = lib.mkForce "/var/lib/openclaw";
+      JAVA_TOOL_OPTIONS = lib.mkForce "-Duser.home=/var/lib/openclaw";
+    };
+    serviceConfig = {
+      User = lib.mkForce "openclaw";
+      Group = lib.mkForce "openclaw";
+      PrivateTmp = lib.mkForce false;
+      ProtectHome = lib.mkForce false;
+      ProtectSystem = lib.mkForce false;
+    };
+  };
+
+  services.mcp-injector = {
+    enable = true;
+    port = 8089;
+    host = "0.0.0.0";
+    llmUrl = "http://localhost:8080";
+    openFirewall = false; # Tailnet provides access control
+    environmentFile = "/var/lib/openclaw/credentials/home-assistant.env";
+
+    # MCP server configs with virtual brain model
+    mcpServers = {
+      servers = {
+        nixos = {cmd = pkgs.lib.getExe config.wespkgs.mcp-nixos;};
+        clojure = {cmd = ''${pkgs.lib.getExe config.wespkgs.clojure-mcp} :project-dir "/" :enable-logging? true'';};
+        ha = {
+          url = "http://prism:8123/api/mcp";
+          headers = {
+            Authorization = {
+              env = "HA_TOKEN";
+              prefix = "Bearer ";
+            };
+          };
+        };
+      };
+      llm-gateway = {
+        url = "http://localhost:8080";
+        virtual-models = {
+          # Main brain — balanced for quality + coverage
+          # Updated 2026-03-13 based on latest model availability research
+          brain = {
+            chain = [
+              # === Tier 0: OpenRouter Free (main brain) ===
+              # hunter-alpha: 1M ctx, built for OpenClaw!
+              "openrouter/openrouter/hunter-alpha"
+
+              # === Tier 1: Zen (fast, generous) ===
+              "zen/big-pickle"
+              "zen/minimax-m2.5-free"
+              "zen/trinity-large-preview-free"
+
+              # === Tier 2: OpenRouter Free (additional options) ===
+              # step-3.5-flash: 256K ctx, #7 coding model, free
+              "openrouter/stepfun/step-3.5-flash:free"
+              # trinity-large-preview: trained for agentic use
+              "openrouter/arcee-ai/trinity-large-preview:free"
+              # qwen3-coder: optimized for agentic coding
+              "openrouter/qwen/qwen3-coder:free"
+              # glm-4.5-air: 131K ctx
+              "openrouter/z-ai/glm-4.5-air:free"
+              # qwen3-next: 262K ctx, fast
+              "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"
+
+              # === Tier 3: Groq (fast, tight limits) ===
+              "groq/qwen3-32b"
+              "groq/llama-3.3-70b"
+
+              # === Tier 4: NVIDIA Free (generous limits, slower) ===
+              "nvidia/nemotron-3-super-120b-a12b:free"
+              "nvidia/nemotron-3-nano-30b-a3b:free"
+
+              # === Tier 5: OpenRouter Paid (last resort) ===
+              # These are now $0 on OpenRouter!
+              "openrouter/minimax/minimax-m2.5"
+              "openrouter/deepseek/deepseek-v3.2"
+              "openrouter/moonshotai/kimi-k2.5"
+            ];
+            cooldown-minutes = 5;
+            retry-on = [400 401 402 403 404 429 500 503];
+          };
+
+          # Subagent model — speed-optimized for spawned tasks
+          subagent = {
+            chain = [
+              # === Groq-first for speed (97ms latencies) ===
+              "groq/llama-4-scout"
+              "groq/llama-4-maverick"
+              "groq/qwen3-32b"
+
+              # === OpenRouter Free ===
+              "openrouter/qwen/qwen3-coder:free"
+              "openrouter/deepseek/deepseek-r1-0528:free"
+
+              # === OpenRouter Paid ($0 now) ===
+              "openrouter/deepseek/deepseek-v3.2"
+            ];
+            cooldown-minutes = 3;
+            retry-on = [400 401 402 403 404 429 500 503];
+          };
+
+          # REPL Subagent Archetypes
+
+          # Researcher — fast lookups, zen-first for cost
+          researcher = {
+            chain = [
+              "zen/big-pickle"
+              "zen/minimax-m2.5-free"
+              "groq/llama-3.1-8b-instant"
+              "openrouter/openrouter/hunter-alpha"
+            ];
+            cooldown-minutes = 3;
+            retry-on = [400 401 402 403 404 429 500 503];
+          };
+
+          # Coder-free — full tools, budget-conscious
+          coder-free = {
+            chain = [
+              # Groq for speed
+              "groq/llama-3.3-70b-versatile"
+              # Zen for cost
+              "zen/big-pickle"
+              # OpenRouter free coding models
+              "openrouter/qwen/qwen3-coder:free"
+              "openrouter/stepfun/step-3.5-flash:free"
+            ];
+            cooldown-minutes = 3;
+            retry-on = [400 401 402 403 404 429 500 503];
+          };
+
+          # Thinker — deep reasoning, bigger models
+          thinker = {
+            chain = [
+              # Groq for speed + reasoning
+              "groq/llama-3.3-70b-versatile"
+              "groq/qwen3-32b"
+              # OpenRouter free for budget
+              "openrouter/openrouter/hunter-alpha"
+              "openrouter/arcee-ai/trinity-large-preview:free"
+              # Zen fallback
+              "zen/big-pickle"
+            ];
+            cooldown-minutes = 5;
+            retry-on = [400 401 402 403 404 429 500 503];
+          };
+
+          # Shim-prefixed versions (for OpenClaw compatibility)
+          shim-coder = {
+            chain = [
+              "groq/llama-3.3-70b-versatile"
+              "zen/big-pickle"
+              "openrouter/qwen/qwen3-coder:free"
+            ];
+            cooldown-minutes = 3;
+            retry-on = [400 401 402 403 404 429 500 503];
+          };
+
+          shim-one-shot = {
+            chain = [
+              "zen/big-pickle"
+              "zen/minimax-m2.5-free"
+              "openrouter/deepseek/deepseek-v3.2"
+            ];
+            cooldown-minutes = 1;
+            retry-on = [400 401 402 403 404 429 500 503];
+          };
+
+          shim-researcher = {
+            chain = [
+              "zen/big-pickle"
+              "zen/minimax-m2.5-free"
+              "openrouter/openrouter/hunter-alpha"
+            ];
+            cooldown-minutes = 3;
+            retry-on = [400 401 402 403 404 429 500 503];
+          };
+
+          shim-thinker = {
+            chain = [
+              "groq/llama-3.3-70b-versatile"
+              "groq/qwen3-32b"
+              "openrouter/openrouter/hunter-alpha"
+              "zen/big-pickle"
+            ];
+            cooldown-minutes = 5;
+            retry-on = [400 401 402 403 404 429 500 503];
+          };
+
+          # One-shot — fastest possible, fire-and-forget
+          one-shot = {
+            chain = [
+              "zen/big-pickle"
+              "zen/minimax-m2.5-free"
+              "openrouter/deepseek/deepseek-v3.2"
+            ];
+            cooldown-minutes = 1;
+            retry-on = [400 401 402 403 404 429 500 503];
+          };
+        };
+      };
+    };
+  };
+}
