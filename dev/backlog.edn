@@ -1,6 +1,19 @@
 {:version "1.0"
  :tasks
- [{:id :test-infrastructure
+ [{:id :observability-logging
+   :title "Enhanced observability logging"
+   :description "Add request correlation IDs (ULID), model info, and structured logging for debugging. Every log entry includes request-id, model, and sufficient context to trace errors."
+   :status :in-progress
+   :priority :high
+   :phase 1
+   :tags [:observability :logging]
+   :created "2026-03-13"
+   :started "2026-03-13"
+   :depends-on []
+   :commits []
+   :spec "dev/specs/observability-logging.edn"}
+
+  {:id :test-infrastructure
    :title "Build test infrastructure"
    :description "Create real HTTP test servers (MCP and Bifrost simulators) for integration testing"
    :status :done

@@ -77,6 +77,7 @@
             echo "  nix build       - Build the package"
             echo "  nix run         - Run the built package"
             echo ""
+            export SHELL=$OLDSHELL
           '';
         };
 

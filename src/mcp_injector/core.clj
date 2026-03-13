@@ -10,13 +10,19 @@
 (def ^:private server-state (atom nil))
 (def ^:private usage-stats (atom {}))
 (def ^:private cooldown-state (atom {}))
+(def ^:private ^:dynamic *request-id* nil)
 
-(defn- log-request [level message data]
-  (println (json/generate-string
-            {:timestamp (str (java.time.Instant/now))
-             :level level
-             :message message
-             :data data})))
+(defn- log-request
+  ([level message data]
+   (log-request level message data nil))
+  ([level message data context]
+   (println (json/generate-string
+             (merge {:timestamp (str (java.time.Instant/now))
+                     :level level
+                     :message message
+                     :request-id (or *request-id* "none")}
+                    context
+                    {:data data})))))
 
 (defn- parse-body [body]
   (try
@@ -149,7 +155,8 @@
     :else {:error (str "Unknown tool: " full-name)}))
 
 (defn- agent-loop [llm-url payload mcp-servers max-iterations]
-  (let [discovered-this-loop (atom {})]
+  (let [model (:model payload)
+        discovered-this-loop (atom {})]
     (loop [current-payload payload
            iteration 0]
       (if (>= iteration max-iterations)
@@ -159,7 +166,7 @@
                                      :content "Maximum iterations reached. Here's what I found so far:"
                                      :tool_calls nil}
                            :finish_reason "length"}]}}
-        (let [_ (log-request "info" "Tool Loop" {:iteration iteration :calls (count (get-in current-payload [:messages]))})
+        (let [_ (log-request "info" "Tool Loop" {:iteration iteration :calls (count (get-in current-payload [:messages]))} {:model model :endpoint llm-url})
               resp (call-llm llm-url current-payload)]
           (if-not (:success resp)
             resp
@@ -275,12 +282,15 @@
 (defn- try-virtual-model-chain [config prepared-req llm-url mcp-servers max-iterations]
   (let [chain (:chain config)
         retry-on (set (:retry-on config [429 500]))
-        cooldown-mins (get config :cooldown-minutes 5)]
+        cooldown-mins (get config :cooldown-minutes 5)
+        original-model (:model prepared-req)]
     (loop [providers (filter #(not (is-on-cooldown? %)) chain)
            last-error nil]
       (if (empty? providers)
         {:success false :status 502 :error (or last-error {:message "All providers failed"})}
         (let [provider (first providers)
+              _ (log-request "info" "Virtual model: trying provider" {:provider provider :remaining (count (rest providers))}
+                             {:model original-model :endpoint llm-url})
               req (-> prepared-req
                       (assoc :model provider)
                       (dissoc :fallbacks))
@@ -288,22 +298,25 @@
           (if (:success result)
             result
             (if (some #(= % (:status result)) retry-on)
-              (do (set-cooldown! provider cooldown-mins)
-                  (recur (rest providers) (:error result)))
+              (do
+                (log-request "warn" "Virtual model: provider failed, setting cooldown" {:provider provider :status (:status result) :cooldown-mins cooldown-mins}
+                             {:model original-model :endpoint llm-url})
+                (set-cooldown! provider cooldown-mins)
+                (recur (rest providers) (:error result)))
               result)))))))
 
 (defn- handle-chat-completion [request mcp-servers config]
   (try
     (let [chat-req (parse-body (:body request))
           model (:model chat-req)
-          _ (log-request "info" "Chat Completion Started" {:model model :stream (:stream chat-req)})
+          _ (log-request "info" "Chat Completion Started" {:stream (:stream chat-req)} {:model model})
           discovered (reduce (fn [acc [s-name s-conf]]
                                (let [url (or (:url s-conf) (:uri s-conf))
                                      cmd (:cmd s-conf)]
                                  (if (or url cmd)
                                    (try (assoc acc s-name (mcp/discover-tools (name s-name) s-conf (:tools s-conf)))
                                         (catch Exception e
-                                          (log-request "warn" "Discovery failed" {:server s-name :error (.getMessage e)})
+                                          (log-request "warn" "Discovery failed" {:server s-name :error (.getMessage e)} {:model model})
                                           acc))
                                    acc)))
                              {} (:servers mcp-servers))
@@ -319,7 +332,7 @@
       (if (:success result)
         (let [final-resp (:data result)
               _ (track-usage! model (:usage final-resp))
-              _ (log-request "info" "Chat Completion Success" {:model model :usage (:usage final-resp)})
+              _ (log-request "info" "Chat Completion Success" {:usage (:usage final-resp)} {:model model})
               body (if (:stream chat-req)
                      (openai/build-chat-response-streaming
                       {:content (get-in final-resp [:choices 0 :message :content])
@@ -332,13 +345,14 @@
               error-data (:error result)
               error-msg (if (map? error-data) (:message error-data) (str "Failed: " error-data))
               error-type (get-in result [:error :type] "internal_error")
+              _ (log-request "warn" "Chat Completion Failed" {:status status :error error-msg :type error-type} {:model model :endpoint llm-url})
               body (if (:stream chat-req)
                      (str "data: " (json/generate-string {:error {:message error-msg :type error-type :details (get-in result [:error :details])}}) "\n\ndata: [DONE]\n\n")
                      (json/generate-string {:error {:message error-msg :type error-type :details (get-in result [:error :details])}}))]
           {:status status :headers {"Content-Type" (if (:stream chat-req) "text/event-stream" "application/json")} :body body})))
     (catch Exception e
       (let [err-type (or (some-> e ex-data :type name) "internal_error")]
-        (log-request "error" "Chat completion failed" {:type err-type :message (.getMessage e)})
+        (log-request "error" "Chat completion failed" {:type err-type :message (.getMessage e)} {})
         {:status 400
          :headers {"Content-Type" "application/json"}
          :body (json/generate-string {:error {:message (or (.getMessage e) "Internal server error")
@@ -377,34 +391,36 @@
       {:status 404 :body (json/generate-string {:error "Not found"})})))
 
 (defn- handler [request mcp-servers config]
-  (try
-    (let [uri (:uri request)]
-      (cond
-        (= uri "/v1/chat/completions")
-        (if (= :post (:request-method request))
-          (handle-chat-completion request mcp-servers config)
-          {:status 405 :body "Method not allowed"})
+  (let [request-id (str (java.util.UUID/randomUUID))]
+    (binding [*request-id* request-id]
+      (try
+        (let [uri (:uri request)]
+          (cond
+            (= uri "/v1/chat/completions")
+            (if (= :post (:request-method request))
+              (handle-chat-completion request mcp-servers config)
+              {:status 405 :body "Method not allowed"})
 
-        (= uri "/health")
-        {:status 200 :headers {"Content-Type" "application/json"} :body (json/generate-string {:status "ok"})}
+            (= uri "/health")
+            {:status 200 :headers {"Content-Type" "application/json"} :body (json/generate-string {:status "ok"})}
 
-        (= uri "/stats")
-        {:status 200 :headers {"Content-Type" "application/json"} :body (json/generate-string {:stats @usage-stats})}
+            (= uri "/stats")
+            {:status 200 :headers {"Content-Type" "application/json"} :body (json/generate-string {:stats @usage-stats})}
 
-        (str/starts-with? uri "/api/v1")
-        (handle-api request mcp-servers config)
+            (str/starts-with? uri "/api/v1")
+            (handle-api request mcp-servers config)
 
-        :else
-        {:status 404 :body "Not found"}))
-    (catch Exception e
-      (let [err-data (ex-data e)
-            status (or (:status err-data) 500)
-            err-type (or (some-> err-data :type name) "internal_error")]
-        (log-request "error" "Request failed" {:uri (:uri request) :type err-type :message (.getMessage e)})
-        {:status status
-         :headers {"Content-Type" "application/json"}
-         :body (json/generate-string {:error {:message (or (:message err-data) (.getMessage e) "Internal server error")
-                                              :type err-type}})}))))
+            :else
+            {:status 404 :body "Not found"}))
+        (catch Exception e
+          (let [err-data (ex-data e)
+                status (or (:status err-data) 500)
+                err-type (or (some-> err-data :type name) "internal_error")]
+            (log-request "error" "Request failed" {:type err-type :message (.getMessage e)} {:endpoint (:uri request)})
+            {:status status
+             :headers {"Content-Type" "application/json"}
+             :body (json/generate-string {:error {:message (or (:message err-data) (.getMessage e) "Internal server error")
+                                                  :type err-type}})}))))))
 
 (defn start-server [mcp-config]
   (let [initial-config (if (and (map? mcp-config) (not (:servers mcp-config)))

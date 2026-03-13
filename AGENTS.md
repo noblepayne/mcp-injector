@@ -7,7 +7,57 @@
 
 We write **situated programs** that are reliable, robust, and data-driven. We reject OOP nonsense in favor of simple, composable systems. This codebase follows the philosophy of grumpy senior developers who've been burned by complexity:
 
-### Test-First Design
+---
+
+## Research-First Workflow (Shotgun Pattern)
+
+> "AI coding tools make you fast at building. They don't make you fast at knowing what to build."
+
+Before implementing major features, ALWAYS follow this workflow:
+
+### 1. Ask: "Does this already exist?"
+
+- Don't assume you need to build from scratch
+- Search for existing solutions (libraries, proxies, frameworks)
+- The answer is often "yes, it's called X"
+
+### 2. Research Phase
+
+Before writing ANY code for a new feature:
+1. Read the existing codebase to understand current patterns
+2. Search for existing solutions in the ecosystem
+3. Check if similar functionality exists elsewhere
+4. Ask clarifying questions if requirements are unclear
+
+### 3. Specify Phase
+
+Write a spec before coding that includes:
+- What already exists in the codebase
+- What needs to be built
+- Acceptance criteria
+- Edge cases to handle
+
+### 4. Break Big Changes into Staged PRs
+
+- Don't ship monster PRs
+- Break features into reviewable chunks
+- Each stage should be independently testable
+
+### Example Research Workflow
+
+```
+User: We need usage tracking for LLM calls
+
+Agent (should ask first): 
+- Does this already exist? Let me search...
+- Found: LiteLLM Proxy has built-in usage tracking
+- Alternative: Build custom (3-4 weeks) vs integrate LiteLLM (5 days)
+- Recommendation: Use LiteLLM
+```
+
+---
+
+## Test-First Design
 
 We practice **test-driven development with real integration tests**:
 
@@ -74,10 +124,45 @@ Keep these distinct:
 > "Write tests. Not too many. Mostly integration."
 
 - **Integration tests** verify the system actually works
-- Unit tests are guardrails for pure functions
-- Don't mock what you don't own
-- Test behavior, not implementation
-- Avoid testing trivial code
+- **Unit tests** are guardrails for pure functions
+- **Don't mock what you don't own**
+- **Test behavior, not implementation**
+- **Avoid testing trivial code**
+
+### Context & Token Budgeting
+
+LLMs have context windows. Large prompts = fewer tokens for actual work. Keep prompts lean:
+
+- **Tool descriptions**: Only include tools relevant to the request
+- **System prompts**: Trim verbose explanations, use examples instead
+- **History**: Prune old messages when approaching context limits
+- **Injection strategy**: Use `:lazy` (on-demand) over `:full` for large MCP tool sets
+
+When adding new features:
+1. Estimate prompt size increase
+2. Check against common model context limits (8K, 32K, 128K)
+3. Design for lazy loading if tools > 20
+
+### Spec-Driven Development
+
+For any feature >500 lines of new code, write a spec first:
+
+```clojure
+;; dev/specs/feature-name.edn
+{:title "Feature Name"
+ :description "What this feature does"
+ :acceptance-criteria
+ ["User can do X"
+  "System returns Y when Z"
+  "Errors are handled gracefully"]
+ :edge-cases
+ ["What happens when MCP server is down?"
+  "What happens on timeout?"
+  "What happens with invalid input?"]
+ :depends-on [:existing-feature]}
+```
+
+Store specs in `dev/specs/` directory.
 
 ### Prompt & Tool Calling Best Practices
 
@@ -704,6 +789,7 @@ bb repl
 - `dev/current.edn` - Current session state
 - `dev/log.md` - Running narrative
 - `dev/decisions.edn` - Why we chose X over Y
+- `dev/specs/` - Feature specifications (see Spec-Driven Development)
 
 **Why this works:**
 
@@ -746,6 +832,26 @@ fix: correct port extraction from http-kit server
 
 Use :local-port from meta instead of assuming port 0
 ```
+
+---
+
+## Architectural Patterns
+
+### Avoiding Circular Dependencies
+
+When components need to check state of other components, avoid:
+- `getattr(obj, 'attribute', default)` - loses type safety
+- `hasattr(obj, 'attribute')` - no type checking
+- Moving imports inside functions - hard to maintain
+
+Instead, use data-driven design with shared atoms or pass explicit parameters. If you need protocols, define them in a separate namespace that's a dependency of both.
+
+### Code Organization Principles
+
+- **Single file is fine** - If a program fits in one file (<1000 lines), don't split it
+- **Namespace boundaries** - Split when you have distinct, independent concerns
+- **Shared state** - Use atoms at the appropriate scope (not global unless truly necessary)
+- **Configuration** - Keep it in EDN files, load at runtime, not compile time
 
 ## Common Gotchas
 
@@ -823,3 +929,29 @@ If zen/kimi-k2.5-free hits context limit (503), nvidia/moonshotai/kimi-k2.5 has 
 ```
 
 But most chains are same-model-different-provider for redundancy, not tiered.
+
+---
+
+## The Most Important Lesson
+
+> "AI coding tools make you fast at building. They don't make you fast at knowing what to build."
+
+**AI agents NEVER ask "does this already exist?"** They'll suggest building a custom proxy before checking if LiteLLM exists. They'll recommend a database before checking if SQLite fits. They'll architect a queue before checking if channels work.
+
+**Your job as the agent is to:**
+1. ALWAYS research first - check what libraries/solutions already exist
+2. Question assumptions - don't accept "we need to build X" without checking
+3. Read this codebase first - understand what's already here before adding
+4. Search the ecosystem - someone has probably solved your problem
+
+**When to research vs. build:**
+
+| Build from scratch | Use existing |
+|-------------------|--------------|
+| Bug fixes in code you understand | New infrastructure components |
+| Minor UI tweaks | Authentication/authorization |
+| Configuration changes | Data processing pipelines |
+| Straightforward CRUD | Rate limiting, caching, proxies |
+| | External API integrations |
+
+The research phase is what separates good agents from cargo-cult AI.
