@@ -1,0 +1,6 @@
+.clojure-mcp/
+tmp/
+logs/
+.lsp/
+.calva/
+result
