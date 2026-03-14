@@ -1,4 +1,15 @@
- {:servers
+;; Governance and security configuration
+;; Privileged tools like clojure-eval are blocked by default, require explicit allow
+ {:governance
+  {:mode :permissive
+   :policy
+   {:allow ["clojure-eval"]}  ;; Allow native clojure-eval tool
+   :pii
+   {:enabled true :mode :replace}
+   :audit
+   {:enabled true :path "logs/audit.log.ndjson"}}
+
+  :servers
   {:auphonic {:url "http://localhost:3003/mcp"
               :tools nil}
    :nixos {:cmd ["nix" "run" "github:utensils/mcp-nixos"]}

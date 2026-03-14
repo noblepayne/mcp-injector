@@ -40,16 +40,7 @@
       :task (do
               (run 'lint)
               (run 'format-check)
-              (run 'test)
-              (run 'test-virtual))}
-
-  test-virtual {:doc "Run virtual model tests"
-                :requires ([clojure.test :as t])
-                :task (do
-                        (require 'mcp-injector.virtual-model-test)
-                        (let [{:keys [fail error]} (t/run-tests 'mcp-injector.virtual-model-test)]
-                          (when (pos? (+ fail error))
-                            (System/exit 1))))}
+              (run 'test))}
 
   serve {:doc "Start the mcp-injector server"
          :task (exec 'mcp-injector.core/-main)}}}

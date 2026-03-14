@@ -16,7 +16,7 @@ mcp-injector sits between an agent (like OpenClaw) and LLM gateways. It provides
 
 ## Governance & Security
 
-mcp-injector includes a robust governance layer configured via the `:governance` key in `mcp-servers.edn`.
+mcp-injector includes a robust governance layer configured via the `:governance` key in `mcp-servers.edn` (copy from `mcp-servers.example.edn`).
 
 ### Governance Modes
 - `:permissive` (Default): All tools are allowed unless explicitly denied.
@@ -56,7 +56,12 @@ bb run
 
 ## Configuration
 
-Create `mcp-servers.edn`:
+Copy the example config and customize:
+```bash
+cp mcp-servers.example.edn mcp-servers.edn
+```
+
+Edit `mcp-servers.edn`:
 ```clojure
 {:servers
   {:stripe
@@ -96,4 +101,4 @@ services.mcp-injector = {
 
 ______________________________________________________________________
 
-**Status**: Production-ready | **Tests**: 37 passing | **Built with**: Babashka + http-kit + Cheshire
+**Status**: Production-ready | **Tests**: 54 passing | **Built with**: Babashka + http-kit + Cheshire

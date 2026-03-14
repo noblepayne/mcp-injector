@@ -287,7 +287,7 @@ export MCP_INJECTOR_LLM_URL="http://localhost:8080"
 export MCP_INJECTOR_LOG_LEVEL="info"
 export MCP_INJECTOR_MAX_ITERATIONS=10
 export MCP_INJECTOR_TIMEOUT_MS=1800000
-export MCP_INJECTOR_MCP_CONFIG="./mcp-servers.edn"
+export MCP_INJECTOR_MCP_CONFIG="./mcp-servers.edn"  # copy from mcp-servers.example.edn
 ```
 
 ## Testing

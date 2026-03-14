@@ -4,3 +4,5 @@ logs/
 .lsp/
 .calva/
 result
+# Local MCP config (copy mcp-servers.example.edn to this file)
+mcp-servers.edn

@@ -16,7 +16,12 @@ ______________________________________________________________________
 
 ## Step 1: Configure mcp-servers.edn
 
-Create or update `mcp-servers.edn` in the mcp-injector directory:
+Copy the example config and customize:
+```bash
+cp mcp-servers.example.edn mcp-servers.edn
+```
+
+Edit `mcp-servers.edn` in the mcp-injector directory:
 
 ```clojure
 {:servers

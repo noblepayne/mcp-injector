@@ -252,7 +252,7 @@ nix develop
 
 ```bash
 # Start the runtime server
-bb run
+bb serve
 
 # Start REPL
 bb repl
@@ -391,9 +391,8 @@ nix run nixpkgs#mdformat -- NIX_USAGE.md situated-agent-runtime-spec.md
 ```
 src/
   mcp_injector/           ; Note: underscore for Clojure filenames
-    core.clj              # HTTP server, main entry
+    core.clj              # HTTP server, main entry, agent loop
     openai_compat.clj     # SSE formatting, OpenAI API compat
-    agent_loop.clj        # Agent execution loop
     mcp_client.clj        # HTTP MCP client
     config.clj            # Configuration, env vars
 test/
@@ -404,7 +403,7 @@ test/
 docs/
   mcp-injector-config-review.md  # Internal config recommendations (update when adding features!)
 bb.edn                    # Babashka config
-mcp-servers.edn           # MCP server configurations
+mcp-servers.example.edn   # MCP server configuration template (copy to mcp-servers.edn)
 ```
 
 ### Environment Variables
@@ -415,10 +414,10 @@ MCP_INJECTOR_HOST=127.0.0.1              # Bind address
 MCP_INJECTOR_LLM_URL=http://...      # LLM endpoint
 MCP_INJECTOR_LOG_LEVEL=info              # debug|info|warn|error
 MCP_INJECTOR_MAX_ITERATIONS=10           # Agent loop limit
-MCP_INJECTOR_MCP_CONFIG=/path/to/mcp-servers.edn
+MCP_INJECTOR_MCP_CONFIG=/path/to/mcp-servers.edn  ; copy from mcp-servers.example.edn
 ```
 
-### MCP Server Configuration (mcp-servers.edn)
+### MCP Server Configuration (copy mcp-servers.example.edn to mcp-servers.edn)
 
 ```clojure
 {:servers

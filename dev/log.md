@@ -242,3 +242,55 @@ ______________________________________________________________________
 **Phase 1 Core Runtime - COMPLETE!**
 
 [Previous session content...]
+
+---
+
+## Appendix: Feature Notes (from legacy DEV_LOG.md)
+
+### Tool Auto-Discovery (2026-02-20)
+
+**Goal:** Auto-discover tools from MCP servers at runtime instead of relying solely on config lists.
+
+**Implementation Summary:**
+
+- Added `mcp/discover-tools` function with caching
+- Added filtering by config `:tools` list:
+  - `nil` → discover all
+  - `[]` → discover none
+  - `["foo" "bar"]` → only those
+- Added error handling for unreachable MCP servers
+
+### STDIO Transport Research (2026-02-20)
+
+**Babashka/process** - available in bb.edn:
+
+- `process` - creates subprocess with configurable stdin/stdout
+- `alive?` - check if process running
+- `destroy` / `destroy-tree` - kill process
+
+**core.async in Babashka:**
+
+- `go` blocks use thread pool (8 threads default), NOT true async
+- `thread` - spawns real threads
+- For many concurrent stdio connections, need to use `thread` or increase pool
+
+**Config Interface:**
+
+```clojure
+;; mcp-servers.edn
+{:servers
+ {:stripe
+  ;; HTTP transport (existing)
+  {:url "http://localhost:3000/mcp"
+   :tools ["retrieve_customer"]}
+  
+  ;; STDIO transport (new)
+  {:cmd "npx -y @modelcontextprotocol/server-filesystem /tmp/files"
+   :env {:API_KEY "xxx"}  ;; optional env vars
+   :cwd "/home/user"       ;; optional working dir
+   :tools ["read_file" "write_file"]}}}
+
+;; Transport detection: if :cmd or :command present → stdio, else → HTTP
+```
+
+**Status:** Research complete, implementation pending.

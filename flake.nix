@@ -31,13 +31,12 @@
 
             cp -r src $out/share/mcp-injector/
             cp bb.edn $out/share/mcp-injector/
-            cp mcp-servers.edn $out/share/mcp-injector/
+            cp mcp-servers.example.edn $out/share/mcp-injector/mcp-servers.edn
 
-            # Use bb run with exec to run the serve task from bb.edn
-            # - Add babashka bin to PATH so bb is available at runtime
+            # Use bb serve to start the mcp-injector server
             makeWrapper ${babashka}/bin/bb $out/bin/mcp-injector \
               --prefix PATH : ${babashka}/bin \
-              --run "cd $out/share/mcp-injector && exec bb run serve" \
+              --run "cd $out/share/mcp-injector && exec bb serve" \
               --set MCP_INJECTOR_HOME "$out/share/mcp-injector"
           '';
 
@@ -109,10 +108,8 @@
               nativeBuildInputs = [pkgs.jet];
             } ''
               # Merge mcpServers and governance into a single EDN file
-              echo '${builtins.toJSON {
-                servers = cfg.mcpServers;
-                governance = cfg.governance;
-              }}' | jet -i json -o edn -k > $out
+              # mcpServers should contain {:servers {...} :llm-gateway {...}}
+              echo '${builtins.toJSON (cfg.mcpServers // { governance = cfg.governance; })}' | jet -i json -o edn -k > $out
             '';
         in {
           options.services.mcp-injector = {

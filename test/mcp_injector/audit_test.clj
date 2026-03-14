@@ -28,7 +28,7 @@
         (is (audit/verify-log log-file secret))))
 
     (testing "Subsequent entry chains to previous signature"
-      (let [entry2 (audit/append-event! secret :test-event {:baz "qux"})]
+      (let [_entry2 (audit/append-event! secret :test-event {:baz "qux"})]
         (with-open [r (io/reader log-file)]
           (is (= 2 (count (line-seq r)))))
         (is (audit/verify-log log-file secret))))
