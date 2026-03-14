@@ -47,19 +47,27 @@
          maps))
 
 (defn- resolve-audit-path [env-path]
-  (or env-path
-      (let [logs-dir (env-var "LOGS_DIRECTORY")
-            state-dir (env-var "STATE_DIRECTORY")
-            xdg-state (env-var "XDG_STATE_HOME")
-            xdg-data (env-var "XDG_DATA_HOME")
-            home (env-var "HOME")]
+  (let [logs-dir (env-var "LOGS_DIRECTORY")
+        state-dir (env-var "STATE_DIRECTORY")
+        xdg-state (env-var "XDG_STATE_HOME")
+        xdg-data (env-var "XDG_DATA_HOME")
+        home (env-var "HOME")
+        cwd (.getAbsolutePath (io/file "."))
+        in-nix-store? (str/starts-with? cwd "/nix/store")
+        default-path (:audit-log-path default-config)]
+    (or env-path
         (cond
           logs-dir (str (str/replace logs-dir #"/$" "") "/audit.log.ndjson")
           state-dir (str (str/replace state-dir #"/$" "") "/audit.log.ndjson")
           xdg-state (str (str/replace xdg-state #"/$" "") "/mcp-injector/audit.log.ndjson")
           xdg-data (str (str/replace xdg-data #"/$" "") "/mcp-injector/audit.log.ndjson")
           home (str home "/.local/state/mcp-injector/audit.log.ndjson")
-          :else (:audit-log-path default-config)))))
+          (and in-nix-store? (not (str/starts-with? default-path "/")))
+          (throw (ex-info (str "Cannot use relative audit log path '" default-path "' in read-only directory: " cwd)
+                          {:cwd cwd
+                           :default-path default-path
+                           :suggestion "Set MCP_INJECTOR_AUDIT_LOG_PATH to an absolute, writable path."}))
+          :else default-path))))
 
 (defn load-config []
   (let [env-audit-path (env-var "MCP_INJECTOR_AUDIT_LOG_PATH")

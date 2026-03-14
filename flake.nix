@@ -33,11 +33,12 @@
             cp bb.edn $out/share/mcp-injector/
             cp mcp-servers.example.edn $out/share/mcp-injector/mcp-servers.edn
 
-            # Use bb serve to start the mcp-injector server
+            # Wrapper that points to the code without changing CWD
             makeWrapper ${babashka}/bin/bb $out/bin/mcp-injector \
               --prefix PATH : ${babashka}/bin \
-              --run "cd $out/share/mcp-injector && exec bb serve" \
-              --set MCP_INJECTOR_HOME "$out/share/mcp-injector"
+              --add-flags "-cp $out/share/mcp-injector/src:$out/share/mcp-injector/test" \
+              --add-flags "-m" \
+              --add-flags "mcp-injector.core"
           '';
 
           meta = with pkgs.lib; {
@@ -256,10 +257,12 @@
                 Type = "simple";
                 User = cfg.user;
                 Group = cfg.group;
+                WorkingDirectory = "/var/lib/mcp-injector";
                 ExecStart = "${mcp-injector-pkg}/bin/mcp-injector";
                 Restart = "on-failure";
                 RestartSec = "5s";
                 StateDirectory = "mcp-injector";
+                LogsDirectory = "mcp-injector";
                 EnvironmentFile = mkIf (cfg.environmentFile != null) cfg.environmentFile;
 
                 NoNewPrivileges = true;
