@@ -48,8 +48,8 @@
        {:query {:description "Query database"
                 :schema {:type "object" :properties {:q {:type "string"} :email {:type "string"}}}
                 :handler (fn [args]
-                           (if (:email args)
-                             {:status "success" :received (:email args)}
+                           (if (or (:email args) (get args "email"))
+                             {:status "success" :received (or (:email args) (get args "email"))}
                              {:email "wes@example.com" :secret "super-secret-123"}))}})
 
       ;; 2. LLM Turn 1: Get data (will be redacted)
@@ -60,12 +60,13 @@
                                                             :arguments "{\"q\":\"select user\"}"}}]})
 
       ;; 3. LLM Turn 2: Receive redacted data and call another tool using the token
+      ;; Token is deterministic: SHA256("EMAIL_ADDRESS|wes@example.com|test-request-id-12345") -> a35e2662
       (test-llm/set-next-response llm
                                   {:role "assistant"
                                    :content "I found the user. Now updating."
                                    :tool_calls [{:id "call_2"
                                                  :function {:name "mcp__trusted-db__query"
-                                                            :arguments "{\"email\":\"[EMAIL_ADDRESS_c2e08747]\"}"}}]})
+                                                            :arguments "{\"email\":\"[EMAIL_ADDRESS_a35e2662]\"}"}}]})
 
       ;; Final response
       (test-llm/set-next-response llm {:role "assistant" :content "Done."})
@@ -74,7 +75,8 @@
                                  {:body (json/generate-string
                                          {:model "brain"
                                           :messages [{:role "user" :content "Update user wes"}]
-                                          :stream false})
+                                          :stream false
+                                          :extra_body {:request-id "test-request-id-12345"}})
                                   :headers {"Content-Type" "application/json"}})
             body (json/parse-string (body->string (:body response)) true)]
 
@@ -83,8 +85,11 @@
         ;; Verify MCP received the RESTORED value in the second call
         (let [requests @(:received-requests mcp)
               tool-calls (filter #(= "tools/call" (-> % :body :method)) requests)
-              update-call (last tool-calls)]
-          (is (= "wes@example.com" (-> update-call :body :params :arguments :email))))))))
+              update-call (last tool-calls)
+              ;; Arguments in MCP request is a JSON string, parse it
+              args-str (-> update-call :body :params :arguments)
+              args (json/parse-string args-str true)]
+          (is (= "wes@example.com" (:email args))))))))
 
 (defn -main [& _args]
   (let [result (clojure.test/run-tests 'mcp-injector.restoration-test)]

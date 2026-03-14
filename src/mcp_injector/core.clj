@@ -216,8 +216,13 @@
 
 (defn- scrub-messages [messages vault request-id]
   (mapv (fn [m]
-          (let [content (:content m)]
-            (if (string? content)
+          (let [content (:content m)
+                role (:role m)]
+            (if (and (string? content)
+                     ;; Only redact user/system messages - assistant tool results are already handled
+                     (or (= role "system") (= role "user"))
+                     ;; Skip if already contains PII tokens (avoid double-redaction)
+                     (not (re-find #"\[PII_[A-Z_]+_[a-f0-9]{8}\]" content)))
               (let [config {:mode :replace :salt request-id}
                     [redacted-content _] (pii/redact-data content config vault)]
                 (assoc m :content redacted-content))
@@ -244,20 +249,20 @@
 (defn- redact-tool-output
   "Redact PII from tool output, return [content vault]"
   [raw-output vault request-id]
-  (let [;; Try to parse as JSON first for proper tokenization
+  (let [;; Try to parse as JSON first for JSON tokenization
         parsed (try (json/parse-string raw-output true) (catch Exception _ nil))
         ;; If parsed successfully, redact the data structure; otherwise redact the string
         ;; Special handling for MCP response format: parse nested :text field if present
         [redacted new-vault] (if parsed
                                (let [;; Check if this is MCP response format with :text field containing JSON
-                                     ;; Handle both map and vector responses
+                                     ;; Handle both map and sequential (vector/list/lazy-seq) responses
                                      parsed (cond
                                               (map? parsed)
                                               (if (string? (:text parsed))
                                                 (try (assoc parsed :text (json/parse-string (:text parsed) true))
                                                      (catch Exception _ parsed))
                                                 parsed)
-                                              (vector? parsed)
+                                              (sequential? parsed)
                                               (mapv (fn [item]
                                                       (if (and (map? item) (string? (:text item)))
                                                         (try (assoc item :text (json/parse-string (:text item) true))
@@ -281,7 +286,7 @@
   (let [model (:model payload)
         discovered-this-loop (atom {})
         vault (atom {})
-        request-id (str (java.util.UUID/randomUUID))
+        request-id (or (:request-id payload) (str (java.util.UUID/randomUUID)))
         context {:model model :request-id request-id}]
     (loop [current-payload (update payload :messages #(scrub-messages % vault request-id))
            iteration 0]
@@ -406,11 +411,14 @@
                                   discovered-tools)
         merged-tools (vec (concat (or existing-tools [])
                                   meta-tools
-                                  discovered-tool-defs))]
+                                  discovered-tool-defs))
+        ;; Merge extra_body into the request for fields like request-id
+        extra-body (or (:extra_body chat-req) {})]
     (-> chat-req
         (assoc :stream false)
         (dissoc :stream_options)
         (assoc :fallbacks fallbacks)
+        (merge extra-body) ;; Lift extra_body fields to top level
         (update :messages (fn [msgs]
                             (mapv (fn [m]
                                     (if (and (= (:role m) "assistant") (:tool_calls m))
