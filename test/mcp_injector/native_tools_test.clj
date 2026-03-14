@@ -122,6 +122,10 @@
                                                                            :governance {:mode :permissive
                                                                                         :policy {:allow []}}}}})] ;; empty allow list
       (try
+        ;; Explicitly clear state before starting the denial flow
+        (test-llm/clear-responses *test-llm*)
+        (reset! (:received-requests *test-llm*) [])
+
         (test-llm/set-tool-call-response *test-llm*
                                          [{:name "clojure-eval"
                                            :arguments {:code "(+ 1 2)"}}])
