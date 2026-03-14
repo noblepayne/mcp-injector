@@ -411,7 +411,12 @@
                        :tool-calls (get-in final-resp [:choices 0 :message :tool_calls])
                        :model model
                        :usage (:usage final-resp)})
-                     (json/generate-string (assoc final-resp :model model)))]
+                     (json/generate-string
+                      (openai/build-chat-response
+                       {:content (get-in final-resp [:choices 0 :message :content])
+                        :tool-calls (get-in final-resp [:choices 0 :message :tool_calls])
+                        :model model
+                        :usage (:usage final-resp)})))]
           {:status 200 :headers {"Content-Type" (if (:stream chat-req) "text/event-stream" "application/json")} :body body})
         (let [status (or (:status result) 500)
               error-data (:error result)

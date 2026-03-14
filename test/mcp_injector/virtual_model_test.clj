@@ -214,6 +214,38 @@
       (is (nil? (get-in (first requests) [:stream_options])))
       (is (= false (get-in (first requests) [:stream]))))))
 
+(deftest test-virtual-model-response-scrubbing
+  (testing "Virtual model response contains requested model name and no provider leaks"
+    (let [{:keys [injector llm]} @test-state
+          port (:port injector)
+          _ (test-llm/set-next-response llm
+                                        {:id "provider-id-123"
+                                         :object "chat.completion"
+                                         :created 123456789
+                                         :model "real-provider-model-name"
+                                         :system_fingerprint "fp_123"
+                                         :choices [{:index 0
+                                                    :message {:role "assistant" :content "Scrubbed!"}
+                                                    :finish_reason "stop"}]
+                                         :usage {:prompt_tokens 10 :completion_tokens 5 :total_tokens 15}})
+          response @(http/post (str "http://localhost:" port "/v1/chat/completions")
+                               {:body (json/generate-string
+                                       {:model "brain"
+                                        :messages [{:role "user" :content "Hello"}]
+                                        :stream false})
+                                :headers {"Content-Type" "application/json"}})
+          body (json/parse-string (body->string (:body response)) true)]
+      (is (= 200 (:status response)))
+      ;; 1. Model name must be the requested virtual name
+      (is (= "brain" (:model body)))
+      ;; 2. Provider-specific fields like system_fingerprint must be removed
+      (is (nil? (:system_fingerprint body)))
+      ;; 3. Standard fields must be present
+      (is (= "chat.completion" (:object body)))
+      ;; 4. Usage data must be preserved
+      (is (= 15 (get-in body [:usage :total_tokens])))
+      (is (= "Scrubbed!" (get-in body [:choices 0 :message :content]))))))
+
 (defn -main
   "Entry point for running tests via bb"
   [& _args]
