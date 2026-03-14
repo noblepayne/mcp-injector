@@ -124,29 +124,33 @@
         (log-request "debug" "HTTP call failed" {:url server-url :method method :error msg} {:server server-url})
         {:error msg}))))
 
-(defn list-tools [server-id server-config]
-  (let [url (or (:url server-config)
-                (when (and (string? server-id) (str/starts-with? server-id "http")) server-id))]
-    (cond
-      (:cmd server-config) (stdio/list-tools server-id server-config)
-      url (let [resp (call-http url server-config "tools/list" {})]
-            (if (:error resp)
-              resp
-              (get-in resp [:result :tools])))
-      :else [])))
+(defn list-tools
+  ([server-id server-config] (list-tools server-id server-config nil))
+  ([server-id server-config policy]
+   (let [url (or (:url server-config)
+                 (when (and (string? server-id) (str/starts-with? server-id "http")) server-id))]
+     (cond
+       (:cmd server-config) (stdio/list-tools server-id server-config policy)
+       url (let [resp (call-http url server-config "tools/list" {})]
+             (if (:error resp)
+               resp
+               (get-in resp [:result :tools])))
+       :else []))))
 
-(defn call-tool [server-id server-config tool-name arguments]
-  (let [url (or (:url server-config)
-                (when (and (string? server-id) (str/starts-with? server-id "http")) server-id))]
-    (log-request "info" "Calling Tool" {:tool tool-name} {:server server-id})
-    (cond
-      (:cmd server-config) (stdio/call-tool server-id server-config tool-name arguments)
-      url (let [resp (call-http url server-config "tools/call" {:name tool-name :arguments arguments})]
-            (cond
-              (:error resp) resp
-              (:result resp) (get-in resp [:result :content])
-              :else {:error "Unknown tool response format"}))
-      :else {:error "No transport configured"})))
+(defn call-tool
+  ([server-id server-config tool-name arguments] (call-tool server-id server-config tool-name arguments nil))
+  ([server-id server-config tool-name arguments policy]
+   (let [url (or (:url server-config)
+                 (when (and (string? server-id) (str/starts-with? server-id "http")) server-id))]
+     (log-request "info" "Calling Tool" {:tool tool-name} {:server server-id})
+     (cond
+       (:cmd server-config) (stdio/call-tool server-id server-config tool-name arguments policy)
+       url (let [resp (call-http url server-config "tools/call" {:name tool-name :arguments arguments})]
+             (cond
+               (:error resp) resp
+               (:result resp) (get-in resp [:result :content])
+               :else {:error "Unknown tool response format"}))
+       :else {:error "No transport configured"}))))
 
 (defn clear-tool-cache! []
   (reset! tool-cache {})
@@ -159,6 +163,8 @@
      (discover-tools server-id server-config-or-tools nil)
      (discover-tools server-id nil server-config-or-tools)))
   ([server-id server-config tool-names]
+   (discover-tools server-id server-config tool-names nil))
+  ([server-id server-config tool-names policy]
    (let [cache-key server-id]
      (if-let [cached (get @tool-cache cache-key)]
        (cond
@@ -168,20 +174,21 @@
                          (some #(= (keyword (:name tool)) %)
                                (map keyword tool-names)))
                        cached))
-       (let [all-tools (list-tools server-id server-config)]
+       (let [all-tools (list-tools server-id server-config policy)]
          (if (and all-tools (not (:error all-tools)))
            (do
              (swap! tool-cache assoc cache-key (vec all-tools))
-             (discover-tools server-id server-config tool-names))
+             (discover-tools server-id server-config tool-names policy))
            (or all-tools [])))))))
 
 (defn get-tool-schema
   "Get schema for a specific tool from an MCP server with caching"
-  [server-id server-config tool-name]
-  (let [tools (discover-tools server-id server-config nil)
-        tool (first (filter #(= tool-name (:name %)) tools))]
-    (or tool
-        {:error (str "Tool not found: " tool-name)})))
+  ([server-id server-config tool-name] (get-tool-schema server-id server-config tool-name nil))
+  ([server-id server-config tool-name policy]
+   (let [tools (discover-tools server-id server-config nil policy)
+         tool (first (filter #(= tool-name (:name %)) tools))]
+     (or tool
+         {:error (str "Tool not found: " tool-name)}))))
 
 (defn get-cache-state []
   {:tools @tool-cache
@@ -189,11 +196,12 @@
    :stdio-sessions (stdio/get-active-sessions)})
 
 (defn warm-up! [mcp-config]
-  (let [servers (:servers mcp-config)]
+  (let [servers (:servers mcp-config)
+        policy (get-in mcp-config [:governance :policy])]
     (log-request "info" "Proactive warm-up started" {:servers (keys servers)})
     (let [results (doall (pmap (fn [[id config]]
                                  (try
-                                   (let [tools (discover-tools (name id) config nil)]
+                                   (let [tools (discover-tools (name id) config nil policy)]
                                      {:id id :success (not (:error tools))})
                                    (catch Exception e
                                      {:id id :success false :error (.getMessage e)})))
