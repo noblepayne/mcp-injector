@@ -1,7 +1,6 @@
 (ns mcp-injector.audit
   (:require [clojure.java.io :as io]
-            [cheshire.core :as json]
-            [clojure.string :as str])
+            [cheshire.core :as json])
   (:import [javax.crypto Mac]
            [javax.crypto.spec SecretKeySpec]
            [java.util Base64]
