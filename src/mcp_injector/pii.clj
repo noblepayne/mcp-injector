@@ -106,17 +106,14 @@
 
 (defn- redact-string-value
   "Redact a single string value, returning [redacted-text token detected-label]"
-  [v {:keys [mode patterns entropy-threshold env vault salt]
-      :or {mode :replace
-           patterns default-patterns
-           entropy-threshold 4.0
-           env {}}
-      :as config}]
+  [v config]
   (if-not (string? v)
     [v nil nil]
     (if (empty? v)
       [v nil nil]
-      (let [existing-token (some (fn [[token _]] (when (= v token) token)) @vault)
+      (let [vault (:vault config)
+            salt (:salt config)
+            existing-token (some (fn [[token _]] (when (= v token) token)) @vault)
             previous-token (some (fn [[token original]] (when (= v original) token)) @vault)]
         (cond
           existing-token [existing-token nil nil]

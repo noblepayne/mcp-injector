@@ -179,9 +179,7 @@
             tool-configs (:tools server)
             tool-config (when (map? tool-configs)
                           (get tool-configs (keyword tool-name)))
-            tool-trust (or (:trust tool-config) :none)
-            server-level (case server-trust :restore 2 :block -1 0)
-            tool-level (case tool-trust :restore 2 :block -1 0)]
+            tool-trust (or (:trust tool-config) :none)]
         (cond
           (= tool-trust :block) :block
           (= server-trust :block) :block

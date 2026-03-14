@@ -229,13 +229,6 @@
               m)))
         messages))
 
-(defn- sanitize-tool-output [content]
-  (if (string? content)
-    (str/replace content
-                 #"(?im)^\s*(system|human|assistant|user)\s*:"
-                 "[REDACTED_ROLE_MARKER]")
-    content))
-
 (defn- restore-tool-args
   "Restore tokens in tool args if server is trusted"
   [args vault mcp-servers full-tool-name]

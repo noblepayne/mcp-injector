@@ -4,11 +4,7 @@
             [mcp-injector.test-mcp-server :as test-mcp]
             [mcp-injector.core :as core]
             [cheshire.core :as json]
-            [org.httpkit.client :as http]
-            [clojure.string :as str]))
-
-(defn- body->string [body]
-  (if (string? body) body (slurp body)))
+            [org.httpkit.client :as http]))
 
 (def test-state (atom {}))
 
@@ -77,9 +73,7 @@
                                           :messages [{:role "user" :content "Update user wes"}]
                                           :stream false
                                           :extra_body {:request-id "test-request-id-12345"}})
-                                  :headers {"Content-Type" "application/json"}})
-            body (json/parse-string (body->string (:body response)) true)]
-
+                                  :headers {"Content-Type" "application/json"}})]
         (is (= 200 (:status response)))
 
         ;; Verify MCP received the RESTORED value in the second call
