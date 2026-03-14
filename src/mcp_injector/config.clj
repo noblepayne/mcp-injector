@@ -46,6 +46,21 @@
              :else new))
          maps))
 
+(defn- resolve-audit-path [env-path]
+  (or env-path
+      (let [logs-dir (env-var "LOGS_DIRECTORY")
+            state-dir (env-var "STATE_DIRECTORY")
+            xdg-state (env-var "XDG_STATE_HOME")
+            xdg-data (env-var "XDG_DATA_HOME")
+            home (env-var "HOME")]
+        (cond
+          logs-dir (str (str/replace logs-dir #"/$" "") "/audit.log.ndjson")
+          state-dir (str (str/replace state-dir #"/$" "") "/audit.log.ndjson")
+          xdg-state (str (str/replace xdg-state #"/$" "") "/mcp-injector/audit.log.ndjson")
+          xdg-data (str (str/replace xdg-data #"/$" "") "/mcp-injector/audit.log.ndjson")
+          home (str home "/.local/state/mcp-injector/audit.log.ndjson")
+          :else (:audit-log-path default-config)))))
+
 (defn load-config []
   (let [env-audit-path (env-var "MCP_INJECTOR_AUDIT_LOG_PATH")
         env-audit-secret (env-var "MCP_INJECTOR_AUDIT_SECRET")]
@@ -56,7 +71,7 @@
      :max-iterations (parse-int (env-var "MCP_INJECTOR_MAX_ITERATIONS") (:max-iterations default-config))
      :log-level (env-var "MCP_INJECTOR_LOG_LEVEL" (:log-level default-config))
      :timeout-ms (parse-int (env-var "MCP_INJECTOR_TIMEOUT_MS") (:timeout-ms default-config))
-     :audit-log-path (or env-audit-path (:audit-log-path default-config))
+     :audit-log-path (resolve-audit-path env-audit-path)
      :audit-secret (or env-audit-secret (:audit-secret default-config))}))
 
 (defn get-env [name]

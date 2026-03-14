@@ -50,11 +50,20 @@
   "Initializes the audit system: opens the writer and restores the last signature state."
   [path]
   (locking log-lock
-    (let [f (io/file path)]
-      (io/make-parents f)
+    (let [f (io/file path)
+          parent (.getParentFile f)]
+      (when parent
+        (io/make-parents f)
+        (when-not (.exists parent)
+          (throw (ex-info (str "Could not create audit log directory: " (.getAbsolutePath parent))
+                          {:path path :absolute-path (.getAbsolutePath f)}))))
       (reset! last-sig-state (get-last-sig-from-file f))
       (when-let [old-w @audit-writer] (.close ^BufferedWriter old-w))
-      (reset! audit-writer (BufferedWriter. (FileWriter. f true))))))
+      (try
+        (reset! audit-writer (BufferedWriter. (FileWriter. f true)))
+        (catch java.io.FileNotFoundException e
+          (throw (ex-info (str "Audit log file not accessible: " (.getAbsolutePath f))
+                          {:path path :absolute-path (.getAbsolutePath f)} e)))))))
 
 (defn close-audit! []
   (locking log-lock

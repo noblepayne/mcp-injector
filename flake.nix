@@ -59,7 +59,7 @@
             babashka
             clojure
             clj-kondo
-            clj-fmt
+            cljfmt
             mdformat
           ];
 
