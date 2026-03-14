@@ -1,0 +1,28 @@
+{:title "Usage Tracking & Provider Metrics"
+ :description "Detailed usage tracking and rate-limit metrics for both virtual models and individual providers."
+ :acceptance-criteria
+ ["Each successful LLM call increments token usage for the specific provider used"
+  "Rate-limit failures increment a 'rate-limits' counter for the failed provider"
+  "Virtual model success results propagate the actual provider identity to the top level"
+  "Audit logs include the :provider field for successful completions"
+  "The /api/v1/stats and /stats endpoints include provider-level breakdown"
+  "Documentation (README.md, AGENTS.md) reflects the new observability capabilities"
+  "Tool outputs are sanitized to prevent structural role-injection"]
+ :data-model
+ {:usage-stats
+  {"model-or-provider-id"
+   {:requests 0
+    :total-input-tokens 0
+    :total-output-tokens 0
+    :total-tokens 0
+    :rate-limits 0
+    :context-overflows 0
+    :last-updated 0}}}
+ :edge-cases
+ ["What if the provider identity is unknown? (Fall back to model name)"
+  "Does tracking usage for a virtual model (e.g., 'brain') still work alongside the provider track? (Yes, track both)"
+  "Max-iterations reached: should we skip usage recording or record with zero tokens?"
+  "Tool denied (policy): should we record a denied attempt? (Future enhancement)"]
+ :follow-up
+ {:test-llm-default-usage "Make default usage nil in test-llm-server to force explicit opt-in for usage-aware tests"
+  :policy-error-fingerprinting "Return generic 'Tool execution denied' from execute-tool instead of specific policy reason to prevent probing"}}

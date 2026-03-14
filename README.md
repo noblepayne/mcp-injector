@@ -10,6 +10,7 @@ mcp-injector sits between an agent (like OpenClaw) and LLM gateways. It provides
 - ✅ **Governance Framework** - Declarative tool access policies (Permissive/Strict).
 - ✅ **PII Scanning** - Automatic redaction of sensitive data in prompts and tool outputs.
 - ✅ **Signed Audit Trail** - Tamper-proof NDJSON logs with ULID and HMAC chaining.
+- ✅ **Provider-Level Observability** - Granular tracking of tokens, requests, and rate-limits per provider.
 - ✅ **Multi-transport MCP** - Support for HTTP and STDIO (local process) MCP servers.
 - ✅ **Error translation** - Converts cryptic provider errors into actionable messages.
 
@@ -74,6 +75,7 @@ Create `mcp-servers.edn`:
 
 - `GET /api/v1/status`: Health and version.
 - `GET /api/v1/mcp/tools`: List discovered tools.
+- `GET /api/v1/stats`: Usage statistics broken down by model and provider.
 - `GET /api/v1/audit/verify`: Cryptographically verify the audit log integrity.
 - `POST /api/v1/mcp/reset`: Clear caches and restart processes.
 

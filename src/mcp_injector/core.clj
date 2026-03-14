@@ -108,24 +108,46 @@
         (log-request "warn" "LLM Error" {:status status :body (:body resp) :translated translated})
         {:success false :status (:status translated) :error translated}))))
 
-(defn- track-usage! [model usage]
-  (when (and model usage)
-    (swap! usage-stats update model (fn [existing]
-                                      (let [input (or (:prompt_tokens usage) 0)
-                                            output (or (:completion_tokens usage) 0)
-                                            total (or (:total_tokens usage) (+ input output))]
-                                        {:requests (inc (or (:requests existing) 0))
-                                         :total-input-tokens (+ input (or (:total-input-tokens existing) 0))
-                                         :total-output-tokens (+ output (or (:total-output-tokens existing) 0))
-                                         :total-tokens (+ total (or (:total-tokens existing) 0))
-                                         :last-updated (System/currentTimeMillis)})))))
+(defn- record-completion! [alias provider usage]
+  (when usage
+    (let [update-entry (fn [existing usage]
+                         (let [input (or (:prompt_tokens usage) 0)
+                               output (or (:completion_tokens usage) 0)
+                               total (or (:total_tokens usage) (+ input output))]
+                           {:requests (inc (or (:requests existing) 0))
+                            :total-input-tokens (+ input (or (:total-input-tokens existing) 0))
+                            :total-output-tokens (+ output (or (:total-output-tokens existing) 0))
+                            :total-tokens (+ total (or (:total-tokens existing) 0))
+                            :rate-limits (or (:rate-limits existing) 0)
+                            :context-overflows (or (:context-overflows existing) 0)
+                            :last-updated (System/currentTimeMillis)}))]
+      (swap! usage-stats
+             (fn [stats]
+               (cond-> stats
+                 alias (update alias update-entry usage)
+                 (and provider (not= provider alias)) (update provider update-entry usage)))))))
+
+(defn- track-provider-failure! [provider status]
+  (when provider
+    (let [counter (if (= status 503) :context-overflows :rate-limits)]
+      (swap! usage-stats update provider
+             (fn [existing]
+               (assoc (or existing {:requests 0
+                                    :total-input-tokens 0
+                                    :total-output-tokens 0
+                                    :total-tokens 0})
+                      counter (inc (or (get existing counter) 0))
+                      :last-updated (System/currentTimeMillis)))))))
+
+(defn reset-usage-stats! []
+  (reset! usage-stats {}))
 
 (defn- execute-tool [full-name args mcp-servers discovered-this-loop governance context]
   (let [policy-result (policy/allow-tool? (:policy governance) full-name context)]
     (if-not (:allowed? policy-result)
       (do
         (log-request "warn" "Tool Blocked by Policy" {:tool full-name :reason (:reason policy-result)} context)
-        {:error (str "Policy violation: " (:reason policy-result))})
+        {:error "Tool execution denied"})
       (cond
         (= full-name "get_tool_schema")
         (let [full-tool-name (:tool args)
@@ -187,6 +209,13 @@
             m))
         messages))
 
+(defn- sanitize-tool-output [content]
+  (if (string? content)
+    (str/replace content
+                 #"(?im)^\s*(system|human|assistant|user)\s*:"
+                 "[REDACTED_ROLE_MARKER]")
+    content))
+
 (defn- agent-loop [llm-url payload mcp-servers max-iterations governance]
   (let [model (:model payload)
         discovered-this-loop (atom {})
@@ -195,6 +224,7 @@
            iteration 0]
       (if (>= iteration max-iterations)
         {:success true
+         :provider model
          :data {:choices [{:index 0
                            :message {:role "assistant"
                                      :content "Maximum iterations reached. Here's what I found so far:"
@@ -208,14 +238,14 @@
                   message (get-in (first choices) [:message])
                   tool-calls (:tool_calls message)]
               (if-not tool-calls
-                resp
+                (assoc resp :provider model)
                 (let [mcp-calls (filter #(or (= (get-in % [:function :name]) "get_tool_schema")
                                              (str/starts-with? (get-in % [:function :name]) "mcp__"))
                                         tool-calls)
                       native-calls (filter #(= (get-in % [:function :name]) "clojure-eval")
                                            tool-calls)]
                   (if (and (empty? mcp-calls) (empty? native-calls))
-                    resp
+                    (assoc resp :provider model)
                     (let [results (mapv (fn [tc]
                                           (let [fn-name (get-in tc [:function :name])
                                                 args-str (get-in tc [:function :arguments])
@@ -225,9 +255,10 @@
                                                                  {:success false :error (.getMessage e)}))]
                                             (if (:success parse-result)
                                               (let [result (execute-tool fn-name (:args parse-result) mcp-servers discovered-this-loop governance context)
-                                                    ;; Scrub tool output
-                                                    content (if (string? result) result (json/generate-string result))
-                                                    {:keys [text detected]} (pii/scan-and-redact content {:mode :replace})
+                                                    ;; Scrub and sanitize tool output
+                                                    raw-content (if (string? result) result (json/generate-string result))
+                                                    sanitized (sanitize-tool-output raw-content)
+                                                    {:keys [text detected]} (pii/scan-and-redact sanitized {:mode :replace})
                                                     _ (when (seq detected)
                                                         (log-request "info" "PII Redacted in Tool Output" {:tool fn-name :labels detected} context))]
                                                 {:role "tool"
@@ -334,14 +365,15 @@
                       (dissoc :fallbacks))
               result (agent-loop llm-url req mcp-servers max-iterations governance)]
           (if (:success result)
-            result
+            (assoc result :provider provider)
             (if (some #(= % (:status result)) retry-on)
               (do
                 (log-request "warn" "Virtual model: provider failed, setting cooldown" {:provider provider :status (:status result) :cooldown-mins cooldown-mins}
                              {:model original-model :endpoint llm-url})
                 (set-cooldown! provider cooldown-mins)
+                (track-provider-failure! provider (:status result))
                 (recur (rest providers) (:error result)))
-              result)))))))
+              (assoc result :provider provider))))))))
 
 (defn- handle-chat-completion [request mcp-servers config]
   (try
@@ -370,8 +402,9 @@
                    (agent-loop llm-url prepared-req mcp-servers max-iter gov))]
       (if (:success result)
         (let [final-resp (:data result)
-              _ (track-usage! model (:usage final-resp))
-              _ (log-request "info" "Chat Completion Success" {:usage (:usage final-resp)} {:model model})
+              actual-provider (:provider result)
+              _ (record-completion! model actual-provider (:usage final-resp))
+              _ (log-request "info" "Chat Completion Success" {:usage (:usage final-resp) :provider actual-provider} {:model model})
               body (if (:stream chat-req)
                      (openai/build-chat-response-streaming
                       {:content (get-in final-resp [:choices 0 :message :content])

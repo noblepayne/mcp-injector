@@ -38,6 +38,7 @@
     (test-llm/clear-responses (:llm @test-state))
     (reset! (:received-requests (:llm @test-state)) [])
     (core/reset-cooldowns!)
+    (core/reset-usage-stats!)
     (f)))
 
 (deftest test-pass-through-non-virtual
@@ -140,6 +141,39 @@
         (is (= 200 (:status response)))
         (is (= 1 (count requests)))
         (is (= "provider2/model2" (get-in (first requests) [:model])))))))
+
+(deftest test-usage-tracking-in-fallback
+  (testing "Virtual model tracks usage for both alias and actual provider during fallback"
+    (let [{:keys [injector llm]} @test-state
+          port (:port injector)
+          _ (test-llm/set-error-response llm 429 "Rate limited")
+          _ (test-llm/set-next-response llm
+                                        {:role "assistant"
+                                         :content "Fallback success"
+                                         :usage {:prompt_tokens 10 :completion_tokens 20 :total_tokens 30}})
+          response @(http/post (str "http://localhost:" port "/v1/chat/completions")
+                               {:body (json/generate-string
+                                       {:model "brain"
+                                        :messages [{:role "user" :content "Hello usage"}]
+                                        :stream false})
+                                :headers {"Content-Type" "application/json"}})
+          _ (is (= 200 (:status response)))
+
+          ;; Query stats
+          stats-resp @(http/get (str "http://localhost:" port "/api/v1/llm/state"))
+          stats (json/parse-string (body->string (:body stats-resp)) true)
+          usage (:usage stats)]
+
+      ;; 1. Alias "brain" should have tokens
+      (is (= 30 (get-in usage [:brain :total-tokens])))
+      (is (= 1 (get-in usage [:brain :requests])))
+
+      ;; 2. "provider1/model1" should have rate-limit incremented
+      (is (= 1 (get-in usage [(keyword "provider1/model1") :rate-limits])))
+
+      ;; 3. "provider2/model2" should have tokens
+      (is (= 30 (get-in usage [(keyword "provider2/model2") :total-tokens])))
+      (is (= 1 (get-in usage [(keyword "provider2/model2") :requests]))))))
 
 (deftest test-stream-true-converted-to-false
   (testing "stream=true from client is converted to stream=false for LLM"

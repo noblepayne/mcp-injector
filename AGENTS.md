@@ -68,7 +68,10 @@ We practice **test-driven development with real integration tests**:
 - **Test the progressive flow specifically** - Ensure tests cover the full Directory -> Discover -> Call lifecycle
 - **Case-insensitive headers** - MCP/HTTP headers are often lowercased by servers; tests must be robust
 - **Config Merging is tricky** - Always prioritize explicit test overrides over file-based config
-- **Loop state is precious** - Changes to the agent loop must be verified against history persistence
+- **Loop state is precious** - Changes to the agent loop must be verified against history persistence. Usage tracking should happen at the provider level to allow for reliability scoring and automated cooldowns.
+
+### Self-Monitoring Agents
+Downstream agents should use the `/api/v1/stats` endpoint to monitor their own consumption and provider reliability. This allows for proactive model switching or budget management without manual intervention.
 
 **Why real servers?**
 
