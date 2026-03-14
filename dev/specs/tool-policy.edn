@@ -1,0 +1,19 @@
+{:title "Tool Access Control (Guardrails)"
+ :description "Declarative predicates that enforce safety boundaries on MCP tool execution."
+ :philosophy "Simple predicates (Pure Functions), Fail-fast, Least Privilege."
+ :inspired-by "Talon (Policy), Hillel Wayne (State/Constraints)"
+ :implementation-strategy
+ {:policy-path "config/policy.edn"
+  :core-fn "mcp-injector.policy/allow-tool?"
+  :logic "Match (server-id, tool-name) against allow/deny lists."}
+ :acceptance-criteria
+ ["Policy is an EDN map of rules (e.g., {:allow [\"stripe.*\"] :deny [\"fs.rm\"]})."
+  "Decisions are pure calculations based on (Policy, ToolCall, RequestContext)."
+  "Support 'Dry Run' mode: Log a policy violation but allow the execution (for testing)."
+  "Block execution in `execute-tool` before the MCP client is invoked."
+  "Data-classification-aware: Block high-privilege tools if the request contains PII."]
+ :edge-cases
+ ["Wildcard expansion performance."
+  "Conflicting rules (Deny always wins)."
+  "LLM confusion when a tool in the manifest is runtime-blocked."]
+ :depends-on [:audit-trail]}
