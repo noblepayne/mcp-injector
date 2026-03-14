@@ -60,7 +60,7 @@
             babashka
             clojure
             clj-kondo
-            cljfmt
+            clj-fmt
             mdformat
           ];
 
@@ -108,7 +108,11 @@
             pkgs.runCommand "mcp-servers.edn" {
               nativeBuildInputs = [pkgs.jet];
             } ''
-              echo '${builtins.toJSON cfg.mcpServers}' | jet -i json -o edn -k > $out
+              # Merge mcpServers and governance into a single EDN file
+              echo '${builtins.toJSON {
+                servers = cfg.mcpServers;
+                governance = cfg.governance;
+              }}' | jet -i json -o edn -k > $out
             '';
         in {
           options.services.mcp-injector = {
@@ -142,22 +146,43 @@
                     url = "http://localhost:3001/mcp";
                     tools = ["retrieve_customer" "list_charges"];
                   };
-                  home-assistant = {
-                    url = "http://192.168.1.100:8123/api/mcp";
-                    headers = {
-                      Authorization = "Bearer your-token-here";
-                    };
-                  };
-                  local-tool = {
-                    cmd = ["node" "/path/to/server.js"];
-                    env = {
-                      API_KEY = "secret";
-                      DYNAMIC = { env = "MY_VAR"; prefix = "prefix-"; };
-                    };
-                    cwd = "/path/to/project";
-                  };
                 }
               '';
+            };
+
+            governance = mkOption {
+              type = types.submodule {
+                options = {
+                  mode = mkOption {
+                    type = types.enum ["permissive" "strict"];
+                    default = "permissive";
+                    description = "Governance mode. Strict requires explicit allow-rules.";
+                  };
+                  policy = mkOption {
+                    type = types.attrs;
+                    default = {};
+                    description = "Allow/Deny lists and model rules.";
+                  };
+                  pii = mkOption {
+                    type = types.attrs;
+                    default = {
+                      enabled = true;
+                      mode = "replace";
+                    };
+                    description = "PII scanning configuration.";
+                  };
+                  audit = mkOption {
+                    type = types.attrs;
+                    default = {
+                      enabled = true;
+                      path = "logs/audit.log.ndjson";
+                    };
+                    description = "Audit trail configuration.";
+                  };
+                };
+              };
+              default = {};
+              description = "Governance and security framework configuration.";
             };
 
             logLevel = mkOption {
