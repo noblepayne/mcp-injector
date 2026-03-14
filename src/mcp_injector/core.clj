@@ -169,12 +169,10 @@
         (= full-name "clojure-eval")
         (try
           (let [code (:code args)
-                ;; NOTE: clojure-eval is a full JVM/Babashka load-string. 
-                ;; Security is currently enforced only via the Policy layer (explicit opt-in).
                 result (load-string code)]
-            (pr-str result))
+            (json/generate-string result))
           (catch Exception e
-            {:error (str "Eval error: " (.getMessage e))}))
+            (json/generate-string {:error (str "Eval error: " (.getMessage e))})))
 
         (str/starts-with? full-name "mcp__")
         (let [t-name (str/replace full-name #"^mcp__" "")
@@ -584,46 +582,51 @@
                                                   :type err-type}})}))))))
 
 (defn start-server [mcp-config]
-  (let [initial-config (if (and (map? mcp-config) (not (:servers mcp-config)))
-                         mcp-config
-                         {})
-        port (or (:port initial-config)
+  (let [;; Extract governance from original input (could be at top level or nested in :mcp-servers)
+        provided-governance (or (:governance mcp-config)
+                                (:governance (:mcp-servers mcp-config)))
+
+        ;; Runtime settings - prioritize input > env > default
+        port (or (:port mcp-config)
                  (some-> (System/getenv "MCP_INJECTOR_PORT") not-empty Integer/parseInt)
                  8080)
-        host (or (:host initial-config)
+        host (or (:host mcp-config)
                  (System/getenv "MCP_INJECTOR_HOST")
                  "127.0.0.1")
-        llm-url (or (:llm-url initial-config)
+        llm-url (or (:llm-url mcp-config)
                     (System/getenv "MCP_INJECTOR_LLM_URL")
                     "http://localhost:11434")
-        log-level (or (:log-level initial-config)
+        log-level (or (:log-level mcp-config)
                       (System/getenv "MCP_INJECTOR_LOG_LEVEL"))
-        max-iterations (or (:max-iterations initial-config)
+        max-iterations (or (:max-iterations mcp-config)
                            (some-> (System/getenv "MCP_INJECTOR_MAX_ITERATIONS") not-empty Integer/parseInt)
                            10)
-        mcp-config-path (or (:mcp-config-path initial-config)
+        mcp-config-path (or (:mcp-config-path mcp-config)
                             (System/getenv "MCP_INJECTOR_MCP_CONFIG")
                             "mcp-servers.edn")
         ;; Audit trail config
-        audit-log-path (or (:audit-log-path initial-config)
+        audit-log-path (or (:audit-log-path mcp-config)
                            (System/getenv "MCP_INJECTOR_AUDIT_LOG_PATH")
                            "logs/audit.log.ndjson")
-        audit-secret (or (:audit-secret initial-config)
+        audit-secret (or (:audit-secret mcp-config)
                          (System/getenv "MCP_INJECTOR_AUDIT_SECRET")
                          "default-audit-secret")
         ;; Merge provided mcp-config with loaded ones if needed
         base-mcp-servers (cond
                            (and (map? mcp-config) (:servers mcp-config)) mcp-config
-                           (:mcp-servers initial-config) (:mcp-servers initial-config)
+                           (:mcp-servers mcp-config) (:mcp-servers mcp-config)
                            :else (config/load-mcp-servers mcp-config-path))
-        ;; Apply overrides from initial-config (like :virtual-models in tests)
-        mcp-servers (if (seq initial-config)
-                      (let [gateway-overrides (select-keys initial-config [:virtual-models :fallbacks :url])]
-                        (update base-mcp-servers :llm-gateway merge gateway-overrides))
+        ;; Apply overrides from mcp-config (like :virtual-models in tests)
+        mcp-servers (if (map? mcp-config)
+                      (let [gateway-overrides (select-keys mcp-config [:virtual-models :fallbacks :url :governance])
+                            merged (update base-mcp-servers :llm-gateway merge gateway-overrides)]
+                        (if-let [gov (:governance mcp-config)]
+                          (assoc merged :governance gov)
+                          merged))
                       base-mcp-servers)
-        ;; Unified configuration resolution
+        ;; Unified configuration resolution - pass extracted governance
         unified-env {:audit-log-path audit-log-path :audit-secret audit-secret}
-        final-governance (config/resolve-governance (assoc mcp-servers :governance (:governance initial-config)) unified-env)
+        final-governance (config/resolve-governance (assoc mcp-servers :governance provided-governance) unified-env)
         final-config {:port port :host host :llm-url llm-url :log-level log-level
                       :max-iterations max-iterations :mcp-config-path mcp-config-path
                       :audit-log-path audit-log-path :audit-secret audit-secret

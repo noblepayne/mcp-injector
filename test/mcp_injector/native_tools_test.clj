@@ -14,10 +14,9 @@
         injector-server (core/start-server {:port 0
                                             :host "127.0.0.1"
                                             :llm-url (str "http://localhost:" (:port llm-server))
-                                            :mcp-servers {:servers {}
-                                                          :llm-gateway {:url (str "http://localhost:" (:port llm-server))
-                                                                        :governance {:mode :permissive
-                                                                                     :policy {:allow ["clojure-eval"]}}}}})]
+                                            :governance {:mode :permissive
+                                                         :policy {:allow ["clojure-eval"]}}
+                                            :mcp-servers {:servers {}}})]
     (try
       (binding [*test-llm* llm-server
                 *injector* injector-server]
@@ -117,10 +116,9 @@
           blocked-injector (core/start-server {:port 0
                                                :host "127.0.0.1"
                                                :llm-url (str "http://localhost:" llm-port)
-                                               :mcp-servers {:servers {}
-                                                             :llm-gateway {:url (str "http://localhost:" llm-port)
-                                                                           :governance {:mode :permissive
-                                                                                        :policy {:allow []}}}}})] ;; empty allow list
+                                               :governance {:mode :permissive
+                                                            :policy {:allow []}}
+                                               :mcp-servers {:servers {}}})] ;; empty allow list
       (try
         ;; Explicitly clear state before starting the denial flow
         (test-llm/clear-responses *test-llm*)
