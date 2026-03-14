@@ -190,10 +190,8 @@
         (cond
           (= tool-trust :block) :block
           (= server-trust :block) :block
-          (= tool-trust :restore) :restore
-          (= server-trust :restore) :restore
-          (= tool-trust :read) :read
-          (= server-trust :read) :read
+          (#{:restore :read} tool-trust) tool-trust
+          (#{:restore :read} server-trust) server-trust
           :else :none)))))
 
 (defn get-meta-tool-definitions

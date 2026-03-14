@@ -42,28 +42,31 @@
 (deftest test-secret-redaction-and-restoration
   (testing "End-to-end Redact -> Decide -> Restore flow"
     (let [{:keys [injector llm mcp]} @test-state
-          port (:port injector)]
-      ;; 1. Setup MCP to return a secret
+          port (:port injector)
+          request-id "test-request-id-12345"
+          secret-email "wes@example.com"
+          expected-token (pii/generate-token :EMAIL_ADDRESS secret-email request-id)]
+      ;; Setup MCP to return a secret
       ((:set-tools! mcp)
        {:query {:description "Query database"
                 :schema {:type "object" :properties {:q {:type "string"} :email {:type "string"}}}
                 :handler (fn [args]
-                           (if (or (:email args) (get args "email"))
-                             {:status "success" :received (or (:email args) (get args "email"))}
-                             {:email "wes@example.com" :secret "super-secret-123"})}})
-      ;; 2. LLM Turn 1: Get data (will be redacted)
+                           (if-let [email (or (:email args) (get args "email"))]
+                             {:status "success" :received email}
+                             {:email secret-email :secret "super-secret-123"})}})
+      ;; LLM Turn 1: Get data (will be redacted)
       (test-llm/set-next-response llm
                                    {:role "assistant"
                                     :tool_calls [{:id "call_1"
                                                   :function {:name "mcp__trusted-db__query"
                                                              :arguments "{\"q\":\"select user\"}"}}]})
-      ;; 3. LLM Turn 2: Receive redacted data and call another tool using the token
+      ;; LLM Turn 2: Receive redacted data and call another tool using the token
       (test-llm/set-next-response llm
                                    {:role "assistant"
                                     :content "I found the user. Now updating."
                                     :tool_calls [{:id "call_2"
                                                   :function {:name "mcp__trusted-db__query"
-                                                             :arguments "{\"email\":\"[EMAIL_ADDRESS_a35e2662]\"}"}}]})
+                                                             :arguments (json/generate-string {:email expected-token})}}]})
       ;; Final response
       (test-llm/set-next-response llm {:role "assistant" :content "Done."})
       (let [response @(http/post (str "http://localhost:" port "/v1/chat/completions")
@@ -71,7 +74,7 @@
                                          {:model "brain"
                                           :messages [{:role "user" :content "Update user wes"}]
                                           :stream false
-                                          :extra_body {:request-id "test-request-id-12345"}})
+                                          :extra_body {:request-id request-id}})
                                   :headers {"Content-Type" "application/json"}})]
         (is (= 200 (:status response)))
         ;; Verify MCP received the RESTORED value in the second call
@@ -80,7 +83,7 @@
               update-call (last tool-calls)
               args-str (-> update-call :body :params :arguments)
               args (json/parse-string args-str true)]
-          (is (= "wes@example.com" (:email args))))
+          (is (= secret-email (:email args))))
         ;; Verify LLM received REDACTED token (not original) in tool result
         (let [llm-requests @(:received-requests llm)
               tool-call-req (first (filter #(get-in % [:messages (dec (count (:messages %))) :tool_calls]) llm-requests))
@@ -88,8 +91,8 @@
               tool-result-msg (last msgs)]
           (is (some? tool-result-msg))
           (is (= "tool" (:role tool-result-msg)))
-          (is (str/includes? (:content tool-result-msg) "[EMAIL_ADDRESS_a35e2662]"))
-          (is (not (str/includes? (:content tool-result-msg) "wes@example.com"))))))))
+          (is (str/includes? (:content tool-result-msg) expected-token))
+          (is (not (str/includes? (:content tool-result-msg) secret-email))))))))
 
 (deftest test-edit-tool-with-pii-token
   (testing "Edit tool can use restored PII tokens (fixes read->edit workflow)"
@@ -103,17 +106,14 @@
        {:read-file
         {:description "Read file contents"
          :schema {:type "object" :properties {:path {:type "string"}}}
-         :handler (fn [args]
-                    {:content secret-email})}
+         :handler (fn [args] {:content secret-email})}
         :edit-file
         {:description "Edit file"
          :schema {:type "object" :properties {:path {:type "string"}
                                                :old_string {:type "string"}
                                                :new_string {:type "string"}}}
-         :handler (fn [args]
-                    {:success true
-                     :received-args args})}})
-      ;; LLM Turn 1: Read file - should get token
+         :handler (fn [args] {:success true :received-args args})}})
+      ;; LLM Turn 1: Read file
       (test-llm/set-next-response llm
                                    {:role "assistant"
                                     :content "I'll read the file."
@@ -140,7 +140,7 @@
                                           :extra_body {:request-id request-id}})
                                   :headers {"Content-Type" "application/json"}})]
         (is (= 200 (:status response)))
-        ;; Verify that edit tool received the ACTUAL email (not token) in old_string
+        ;; Verify edit tool received ACTUAL email (not token) in old_string
         (let [mcp-requests @(:received-requests mcp)
               edit-call (last (filter #(= "tools/call" (-> % :body :method)) mcp-requests))
               args-str (-> edit-call :body :params :arguments)

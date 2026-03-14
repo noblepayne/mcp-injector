@@ -215,9 +215,9 @@
             (if (and (string? content)
                      ;; Only redact user/system messages - assistant tool results are already handled
                      (or (= role "system") (= role "user"))
-                     ;; Skip if already contains PII tokens (avoid double-redaction)
-                     ;; Token format: [LABEL_hex8] e.g., [EMAIL_ADDRESS_a35e2662]
-                     (not (re-find #"\[[A-Z_]+_[a-f0-9]{8,}\]" content)))
+                      ;; Skip if already contains PII tokens (avoid double-redaction)
+                      ;; Token format: [LABEL_hex12] e.g., [EMAIL_ADDRESS_a35e26620952]
+                     (not (re-find #"\[[A-Z_]+_[a-f0-9]{12}\]" content)))
               (let [config {:mode :replace :salt request-id}
                     [redacted-content _ _] (pii/redact-data content config vault)]
                 (assoc m :content redacted-content))
@@ -225,20 +225,13 @@
         messages))
 
 (defn- restore-tool-args
-  "Restore tokens in tool args if server is trusted.
-   For edit/write operations, also resolve standalone tokens in string arguments."
+  "Restore tokens in tool args if server/tool is trusted (:restore level)."
   [args vault mcp-servers full-tool-name]
   (let [[server tool] (parse-tool-name full-tool-name)
-        trust (when server (config/get-server-trust mcp-servers server tool))
-        ;; For file editing tools, also resolve tokens in string values
-        restore-strings? (contains? #{"edit" "write"} tool)
-        restored (if (= trust :restore)
-                   (pii/restore-tokens args vault)
-                   (if restore-strings?
-                     ;; Even if not fully trusted, resolve tokens for file operations
-                     (pii/restore-tokens args vault)
-                     args))]
-    restored))
+        trust (when server (config/get-server-trust mcp-servers server tool))]
+    (if (= trust :restore)
+      (pii/restore-tokens args vault)
+      args)))
 
 (defn- redact-tool-output
   "Redact PII from tool output, return [content vault]"

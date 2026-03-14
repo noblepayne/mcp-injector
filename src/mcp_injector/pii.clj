@@ -165,7 +165,7 @@
            x))
        data))))
 
-(defn resolve-token
+(defn- resolve-token
   "Resolve a single token string back to its original value.
    Returns the original value if found, or the token unchanged."
   [token-str vault]
