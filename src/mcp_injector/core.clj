@@ -225,13 +225,19 @@
         messages))
 
 (defn- restore-tool-args
-  "Restore tokens in tool args if server is trusted"
+  "Restore tokens in tool args if server is trusted.
+   For edit/write operations, also resolve standalone tokens in string arguments."
   [args vault mcp-servers full-tool-name]
   (let [[server tool] (parse-tool-name full-tool-name)
         trust (when server (config/get-server-trust mcp-servers server tool))
+        ;; For file editing tools, also resolve tokens in string values
+        restore-strings? (contains? #{"edit" "write"} tool)
         restored (if (= trust :restore)
                    (pii/restore-tokens args vault)
-                   args)]
+                   (if restore-strings?
+                     ;; Even if not fully trusted, resolve tokens for file operations
+                     (pii/restore-tokens args vault)
+                     args))]
     restored))
 
 (defn- redact-tool-output

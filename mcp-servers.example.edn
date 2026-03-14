@@ -11,12 +11,16 @@
 
   :servers
   {:auphonic {:url "http://localhost:3003/mcp"
-              :tools nil}
-   :nixos {:cmd ["nix" "run" "github:utensils/mcp-nixos"]}
-    ;; Example local tool (uncomment to use)
-    ;; :filesystem
-    ;; {:cmd ["npx" "-y" "@modelcontextprotocol/server-filesystem" "/path/to/allowed/dir"]
-    ;;  :env {"EXAMPLE_VAR" "value"}}
+              :tools nil
+              :trust "none"}   ; "none" (default), "read", or "restore"
+   :nixos {:cmd ["nix" "run" "github:utensils/mcp-nixos"]
+           :trust "none"}
+     ;; Example local tool (uncomment to use)
+     ;; :filesystem
+     ;; {:cmd ["npx" "-y" "@modelcontextprotocol/server-filesystem" "/path/to/allowed/dir"]
+     ;;  :trust "restore"  ; allow token restoration for edit/write
+     ;;  :tools [{:name "read" :trust "read"}
+     ;;          {:name "write" :trust "restore"}]}
    }
 ;; LLM gateway configuration
   :llm-gateway

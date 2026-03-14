@@ -1,0 +1,14 @@
+{:title "Configurable PII Restoration Trust Levels"
+ :description "Enhance Smart Vault to support configurable trust levels for fine-grained control over token restoration."
+ :acceptance-criteria
+ ["Trust levels :none, :read, :restore are supported in mcp-servers.edn config"
+  "edit tool can restore tokens from vault when server/tool trust is :restore"
+  "NixOS module exposes trust configuration options"
+  "Audit logging records restoration events"
+  "Read tool test demonstrates token generation and vault storage"
+  "Edit tool test demonstrates successful token resolution and file modification"]
+ :edge-cases
+ ["Token not found in vault (should pass through)"
+  "Multiple tokens in single argument string"
+  "Restoration for deeply nested JSON structures"
+  "Partial path trust (server-level :restore but tool-level :none)"]}

@@ -164,3 +164,11 @@
             v-map)
            x))
        data))))
+
+(defn resolve-token
+  "Resolve a single token string back to its original value.
+   Returns the original value if found, or the token unchanged."
+  [token-str vault]
+  (let [v-map @vault
+        original (get v-map token-str)]
+    (or original token-str)))

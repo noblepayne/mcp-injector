@@ -134,19 +134,28 @@
               description = "URL of OpenAI-compatible LLM endpoint";
             };
 
-            mcpServers = mkOption {
-              type = types.attrs;
-              default = {};
-              description = "MCP server configurations";
-              example = literalExpression ''
-                {
-                  stripe = {
-                    url = "http://localhost:3001/mcp";
-                    tools = ["retrieve_customer" "list_charges"];
-                  };
-                }
-              '';
-            };
+             mcpServers = mkOption {
+               type = types.attrs;
+               default = {};
+               description = "MCP server configurations";
+               example = literalExpression ''
+                 {
+                   stripe = {
+                     url = "http://localhost:3001/mcp";
+                     trust = "restore";  # "none" (default), "read", or "restore"
+                     tools = ["retrieve_customer" "list_charges"];
+                   };
+                   workspace = {
+                     url = "http://localhost:3000/mcp";
+                     trust = "restore";
+                     tools = [
+                       { name = "read"; trust = "read"; }
+                       { name = "write"; trust = "restore"; }
+                     ];
+                   };
+                 }
+               '';
+             };
 
             governance = mkOption {
               type = types.submodule {
