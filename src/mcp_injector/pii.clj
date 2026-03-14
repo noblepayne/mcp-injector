@@ -1,12 +1,13 @@
 (ns mcp-injector.pii
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [clojure.walk :as walk])
+  (:import (java.security MessageDigest)))
 
 (def default-patterns
   [{:id :EMAIL_ADDRESS
     :pattern #"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
     :label "[EMAIL_ADDRESS]"}
    {:id :IBAN_CODE
-    ;; Tightened range to 15-34 and added case-insensitivity support via (?i)
     :pattern #"(?i)\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b"
     :label "[IBAN_CODE]"}])
 
@@ -46,8 +47,6 @@
 (defn- scan-env [text env-vars mode]
   (reduce-kv
    (fn [acc k v]
-     ;; Case-sensitive match for env vars is usually safer, 
-     ;; but we ensure the value is long enough to avoid false positives.
      (if (and (not (empty? v)) (> (count v) 5) (str/includes? acc v))
        (str/replace acc v (redact-match mode (str "[ENV_VAR_" k "]") v))
        acc))
@@ -64,7 +63,6 @@
   (let [tokens (str/split text #"\s+")]
     (reduce
      (fn [acc token]
-       ;; Threshold raised to 4.0 + diversity check + length check
        (if (and (> (count token) 12)
                 (> (shannon-entropy token) threshold)
                 (character-diversity? token))
@@ -74,15 +72,13 @@
      tokens)))
 
 (defn scan-and-redact
-  "Scans input text for PII patterns, high-entropy secrets, and env vars.
-   Calculations are performed sequentially on the text."
+  "Scans input text for PII patterns, high-entropy secrets, and env vars."
   [text {:keys [mode patterns entropy-threshold env]
          :or {mode :replace
               patterns default-patterns
               entropy-threshold 4.0
               env {}}}]
-  (let [;; 1. Regex patterns (Standard PII)
-        regex-result (reduce
+  (let [regex-result (reduce
                       (fn [state {:keys [id pattern label]}]
                         (if (seq (re-seq pattern (:text state)))
                           {:text (str/replace (:text state) pattern (fn [m] (redact-match mode label m)))
@@ -90,14 +86,81 @@
                           state))
                       {:text text :detected []}
                       patterns)
-
-        ;; 2. Env vars (Exact matches)
         env-text (scan-env (:text regex-result) env mode)
         env-detections (find-env-detections text env)
-
-        ;; 3. Entropy (Heuristic secrets)
         final-text (scan-entropy env-text entropy-threshold mode)
         entropy-detected (if (not= env-text final-text) [:HIGH_ENTROPY_SECRET] [])]
-
     {:text final-text
      :detected (distinct (concat (:detected regex-result) env-detections entropy-detected))}))
+
+(defn generate-token
+  "Generate a deterministic, truncated SHA-256 hash token."
+  [label value salt]
+  (let [input (str (name label) "|" value "|" salt)
+        digest (.digest (MessageDigest/getInstance "SHA-256") (.getBytes input))
+        hash-str (->> digest
+                      (map (partial format "%02x"))
+                      (apply str))
+        truncated (subs hash-str 0 8)]
+    (str "[" (name label) "_" truncated "]")))
+
+(defn- redact-string-value
+  "Redact a single string value, returning [redacted-text token detected-label]"
+  [v {:keys [mode patterns entropy-threshold env vault salt]
+      :or {mode :replace
+           patterns default-patterns
+           entropy-threshold 4.0
+           env {}}
+      :as config}]
+  (if-not (string? v)
+    [v nil nil]
+    (if (empty? v)
+      [v nil nil]
+      (let [existing-token (some (fn [[token _]] (when (= v token) token)) @vault)
+            previous-token (some (fn [[token original]] (when (= v original) token)) @vault)]
+        (cond
+          existing-token [existing-token nil nil]
+          previous-token [previous-token nil nil]
+          :else
+          (let [result (scan-and-redact v config)]
+            (if (seq (:detected result))
+              (let [detected (first (:detected result))
+                    token (generate-token detected v salt)]
+                (swap! vault assoc token v)
+                [token token detected])
+              [(:text result) nil nil])))))))
+
+(defn redact-data
+  "Recursively walk a data structure, redact string values, store in vault.
+   Returns [redacted-data vault-atom]"
+  ([data config]
+   (redact-data data config (atom {})))
+  ([data config vault]
+   (let [config-with-vault (assoc config :vault vault)
+         redacted (walk/postwalk
+                   (fn [x]
+                     (if (string? x)
+                       (let [[redacted-text _ _] (redact-string-value x config-with-vault)]
+                         redacted-text)
+                       x))
+                   data)]
+     [redacted vault])))
+
+(defn restore-tokens
+  "Recursively walk a data structure, replacing tokens with original values from vault."
+  [data vault]
+  (let [v-map @vault]
+    (if (empty? v-map)
+      data
+      (walk/postwalk
+       (fn [x]
+         (if (string? x)
+           (reduce
+            (fn [s [token original]]
+              (if (and (string? s) (str/includes? s token))
+                (str/replace s (str token) (str original))
+                s))
+            x
+            v-map)
+           x))
+       data))))

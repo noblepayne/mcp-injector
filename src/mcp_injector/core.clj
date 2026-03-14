@@ -199,14 +199,29 @@
 
         :else {:error (str "Unknown tool: " full-name)}))))
 
-(defn- scrub-messages [messages]
+(defn- parse-tool-name
+  "Parse mcp__server__tool format into [server tool]"
+  [full-name]
+  (if (str/includes? full-name "__")
+    (let [t-name (str/replace full-name #"^mcp__" "")
+          idx (str/last-index-of t-name "__")]
+      [(subs t-name 0 idx) (subs t-name (+ idx 2))])
+    [nil full-name]))
+
+(defn- get-server-from-tool
+  "Extract server name from tool name"
+  [full-name]
+  (let [[server _] (parse-tool-name full-name)]
+    server))
+
+(defn- scrub-messages [messages vault request-id]
   (mapv (fn [m]
-          (if (string? (:content m))
-            (let [{:keys [text detected]} (pii/scan-and-redact (:content m) {:mode :replace})]
-              (when (seq detected)
-                (log-request "info" "PII Redacted" {:labels detected} {:role (:role m)}))
-              (assoc m :content text))
-            m))
+          (let [content (:content m)]
+            (if (string? content)
+              (let [config {:mode :replace :salt request-id}
+                    [redacted-content _] (pii/redact-data content config vault)]
+                (assoc m :content redacted-content))
+              m)))
         messages))
 
 (defn- sanitize-tool-output [content]
@@ -216,11 +231,59 @@
                  "[REDACTED_ROLE_MARKER]")
     content))
 
+(defn- restore-tool-args
+  "Restore tokens in tool args if server is trusted"
+  [args vault mcp-servers full-tool-name]
+  (let [server (get-server-from-tool full-tool-name)
+        trust (when server (config/get-server-trust mcp-servers server nil))
+        restored (if (= trust :restore)
+                   (pii/restore-tokens args vault)
+                   args)]
+    restored))
+
+(defn- redact-tool-output
+  "Redact PII from tool output, return [content vault]"
+  [raw-output vault request-id]
+  (let [;; Try to parse as JSON first for proper tokenization
+        parsed (try (json/parse-string raw-output true) (catch Exception _ nil))
+        ;; If parsed successfully, redact the data structure; otherwise redact the string
+        ;; Special handling for MCP response format: parse nested :text field if present
+        [redacted new-vault] (if parsed
+                               (let [;; Check if this is MCP response format with :text field containing JSON
+                                     ;; Handle both map and vector responses
+                                     parsed (cond
+                                              (map? parsed)
+                                              (if (string? (:text parsed))
+                                                (try (assoc parsed :text (json/parse-string (:text parsed) true))
+                                                     (catch Exception _ parsed))
+                                                parsed)
+                                              (vector? parsed)
+                                              (mapv (fn [item]
+                                                      (if (and (map? item) (string? (:text item)))
+                                                        (try (assoc item :text (json/parse-string (:text item) true))
+                                                             (catch Exception _ item))
+                                                        item))
+                                                    parsed)
+                                              :else parsed)
+                                     config {:mode :replace :salt request-id}
+                                     [redacted-struct vault-after] (pii/redact-data parsed config vault)]
+                                 [(json/generate-string redacted-struct) vault-after])
+                               (let [config {:mode :replace :salt request-id}
+                                     [redacted-str vault-after] (pii/redact-data raw-output config vault)]
+                                 [redacted-str vault-after]))
+        ;; For logging, we still scan the raw output
+        detected (:detected (pii/scan-and-redact raw-output {:mode :replace}))]
+    (when (seq detected)
+      (log-request "info" "PII Redacted in Tool Output" {:labels detected} {}))
+    [redacted new-vault]))
+
 (defn- agent-loop [llm-url payload mcp-servers max-iterations governance]
   (let [model (:model payload)
         discovered-this-loop (atom {})
-        context {:model model}]
-    (loop [current-payload (update payload :messages scrub-messages)
+        vault (atom {})
+        request-id (str (java.util.UUID/randomUUID))
+        context {:model model :request-id request-id}]
+    (loop [current-payload (update payload :messages #(scrub-messages % vault request-id))
            iteration 0]
       (if (>= iteration max-iterations)
         {:success true
@@ -239,40 +302,46 @@
                   tool-calls (:tool_calls message)]
               (if-not tool-calls
                 (assoc resp :provider model)
-                (let [mcp-calls (filter #(or (= (get-in % [:function :name]) "get_tool_schema")
-                                             (str/starts-with? (get-in % [:function :name]) "mcp__"))
+                (let [mcp-calls (filter (fn [tc]
+                                          (let [n (get-in tc [:function :name])]
+                                            (or (= n "get_tool_schema")
+                                                (and n (str/starts-with? n "mcp__")))))
                                         tool-calls)
                       native-calls (filter #(= (get-in % [:function :name]) "clojure-eval")
                                            tool-calls)]
                   (if (and (empty? mcp-calls) (empty? native-calls))
                     (assoc resp :provider model)
-                    (let [results (mapv (fn [tc]
-                                          (let [fn-name (get-in tc [:function :name])
-                                                args-str (get-in tc [:function :arguments])
-                                                parse-result (try
-                                                               {:success true :args (json/parse-string args-str true)}
-                                                               (catch Exception e
-                                                                 {:success false :error (.getMessage e)}))]
-                                            (if (:success parse-result)
-                                              (let [result (execute-tool fn-name (:args parse-result) mcp-servers discovered-this-loop governance context)
-                                                    ;; Scrub and sanitize tool output
-                                                    raw-content (if (string? result) result (json/generate-string result))
-                                                    sanitized (sanitize-tool-output raw-content)
-                                                    {:keys [text detected]} (pii/scan-and-redact sanitized {:mode :replace})
-                                                    _ (when (seq detected)
-                                                        (log-request "info" "PII Redacted in Tool Output" {:tool fn-name :labels detected} context))]
-                                                {:role "tool"
+                    (let [[results new-vault]
+                          (reduce
+                           (fn [[results vault-state] tc]
+                             (let [fn-name (get-in tc [:function :name])
+                                   args-str (get-in tc [:function :arguments])
+                                   parse-result (try
+                                                  {:success true :args (json/parse-string args-str true)}
+                                                  (catch Exception e
+                                                    {:success false :error (.getMessage e)}))]
+                               (if (:success parse-result)
+                                 (let [;; Restore args if trusted
+                                       restored-args (restore-tool-args (:args parse-result) vault-state mcp-servers fn-name)
+                                       result (execute-tool fn-name restored-args mcp-servers discovered-this-loop governance context)
+                                       ;; Redact output with vault
+                                       raw-content (if (string? result) result (json/generate-string result))
+                                       [redacted updated-vault] (redact-tool-output raw-content vault-state request-id)]
+                                   [(conj results {:role "tool"
+                                                   :tool_call_id (:id tc)
+                                                   :name fn-name
+                                                   :content redacted})
+                                    updated-vault])
+                                 [(conj results {:role "tool"
                                                  :tool_call_id (:id tc)
                                                  :name fn-name
-                                                 :content text})
-                                              {:role "tool"
-                                               :tool_call_id (:id tc)
-                                               :name fn-name
-                                               :content (json/generate-string
-                                                         {:error "Malformed tool arguments JSON"
-                                                          :details {:args-str args-str
-                                                                    :parse-error (:error parse-result)}})})))
-                                        (concat mcp-calls native-calls))
+                                                 :content (json/generate-string
+                                                           {:error "Malformed tool arguments JSON"
+                                                            :details {:args-str args-str
+                                                                      :parse-error (:error parse-result)}})})
+                                  vault-state])))
+                           [[] vault]
+                           (concat mcp-calls native-calls))
                           newly-discovered @discovered-this-loop
                           new-tools (vec (concat (config/get-meta-tool-definitions)
                                                  (map (fn [[name schema]]
@@ -281,9 +350,12 @@
                                                                     :description (:description schema)
                                                                     :parameters (:inputSchema schema)}})
                                                       newly-discovered)))
-                          new-messages (conj (vec (:messages current-payload)) message)
+                          new-messages (conj (vec (:messages current-payload)) (assoc message :content (or (:content message) "")))
                           new-messages (into new-messages results)]
-                      (recur (assoc current-payload :messages new-messages :tools new-tools) (inc iteration)))))))))))))
+                      (recur (assoc current-payload
+                                    :messages (scrub-messages new-messages new-vault request-id)
+                                    :tools new-tools)
+                             (inc iteration)))))))))))))
 
 (defn- set-cooldown! [provider minutes]
   (swap! cooldown-state assoc provider (+ (System/currentTimeMillis) (* minutes 60 1000))))
@@ -428,11 +500,13 @@
                      (json/generate-string {:error {:message error-msg :type error-type :details (get-in result [:error :details])}}))]
           {:status status :headers {"Content-Type" (if (:stream chat-req) "text/event-stream" "application/json")} :body body})))
     (catch Exception e
-      (let [err-type (or (some-> e ex-data :type name) "internal_error")]
-        (log-request "error" "Chat completion failed" {:type err-type :message (.getMessage e)} {})
+      (let [err-type (or (some-> e ex-data :type name) "internal_error")
+            err-msg (or (.getMessage e) (str e))
+            stack (.getStackTrace e)]
+        (log-request "error" "Chat completion failed" {:type err-type :message err-msg :stack (map str stack)} {})
         {:status 400
          :headers {"Content-Type" "application/json"}
-         :body (json/generate-string {:error {:message (or (.getMessage e) "Internal server error")
+         :body (json/generate-string {:error {:message err-msg
                                               :type err-type}})}))))
 
 (defn get-gateway-state []

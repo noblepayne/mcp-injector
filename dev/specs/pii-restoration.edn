@@ -1,0 +1,15 @@
+{:title "PII/Secret Restoration (Round-Trip)"
+ :description "Enable trusted tools to receive original sensitive data while keeping the LLM's view redacted."
+ :acceptance-criteria
+ ["Tool outputs containing PII are tokenized with deterministic, hybrid labels (e.g., [EMAIL_8f3a2])"
+  "Tokens remain consistent across a single request context"
+  "A request-scoped Vault stores the mapping of Token -> Original Value"
+  "Trusted tools (marked with :trust :restore) receive restored values in their arguments"
+  "Untrusted tools receive the literal token strings"
+  "Deep JSON redaction preserves map keys but tokenizes values"]
+ :edge-cases
+ ["Recursive data structures in tool arguments"
+  "Mixed plain-text and JSON tool outputs"
+  "Token collisions (mitigated via request-id salt)"
+  "Empty or null values in scanned data"]
+ :depends-on [:governance-core :mcp-client]}

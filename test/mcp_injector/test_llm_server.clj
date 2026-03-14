@@ -20,11 +20,13 @@
                         :tool_calls (when (:tool_calls response-data)
                                       (map-indexed
                                        (fn [idx tc]
-                                         {:id (str "call_" idx)
-                                          :type "function"
-                                          :index idx
-                                          :function {:name (:name tc)
-                                                     :arguments (json/generate-string (:arguments tc))}})
+                                         (let [fn-name (or (:name tc) (get-in tc [:function :name]))
+                                               fn-args (or (:arguments tc) (get-in tc [:function :arguments]))]
+                                           {:id (str "call_" idx)
+                                            :type "function"
+                                            :index idx
+                                            :function {:name fn-name
+                                                       :arguments (json/generate-string fn-args)}}))
                                        (:tool_calls response-data)))}
               :finish_reason (if (:tool_calls response-data) "tool_calls" "stop")}]
     ;; Default usage to nil to avoid polluting stats in tests that don't explicitly set it

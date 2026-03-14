@@ -79,8 +79,8 @@
       (is (str/includes? (get-in first-req [:messages 0 :content]) "mcp__stripe"))
       (is (some (fn [t] (= "get_tool_schema" (get-in t [:function :name]))) (get-in first-req [:tools])))
       ;; content might be redacted as [EMAIL_ADDRESS] or [HIGH_ENTROPY_SECRET] depending on scanner
-      (is (some (fn [m] (or (str/includes? (:content m) "[EMAIL_ADDRESS]")
-                            (str/includes? (:content m) "[HIGH_ENTROPY_SECRET]"))) tool-msgs)))))
+      (is (some (fn [m] (or (re-find #"\[EMAIL_ADDRESS(_[a-f0-9]{8})?\]" (:content m))
+                            (re-find #"\[HIGH_ENTROPY_SECRET(_[a-f0-9]{8})?\]" (:content m)))) tool-msgs)))))
 
 (deftest tool-discovery-filtering-nil-shows-all
   (testing "When :tools is nil, all discovered tools from MCP server should be shown"

@@ -166,6 +166,29 @@
     []
     (:servers mcp-config))))
 
+(defn get-server-trust
+  "Get trust level for a server/tool combination.
+   Returns :restore (trusted), :none (untrusted), or :block.
+   Precedence: tool-level :trust > server-level :trust > :none"
+  [mcp-config server-name tool-name]
+  (let [servers (:servers mcp-config)
+        server (get servers (keyword server-name))]
+    (if-not server
+      :none
+      (let [server-trust (or (:trust server) :none)
+            tool-configs (:tools server)
+            tool-config (when (map? tool-configs)
+                          (get tool-configs (keyword tool-name)))
+            tool-trust (or (:trust tool-config) :none)
+            server-level (case server-trust :restore 2 :block -1 0)
+            tool-level (case tool-trust :restore 2 :block -1 0)]
+        (cond
+          (= tool-trust :block) :block
+          (= server-trust :block) :block
+          (= tool-trust :restore) :restore
+          (= server-trust :restore) :restore
+          :else :none)))))
+
 (defn get-meta-tool-definitions
   "Get definitions for meta-tools like get_tool_schema and native tools"
   []
