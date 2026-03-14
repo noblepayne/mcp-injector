@@ -168,8 +168,12 @@
 
 (defn get-server-trust
   "Get trust level for a server/tool combination.
-   Returns :restore (trusted), :none (untrusted), or :block.
-   Precedence: tool-level :trust > server-level :trust > :none"
+    Returns :restore (trusted), :none (untrusted), or :block.
+    Precedence: tool-level :trust > server-level :trust > :none
+    
+    Handles :tools as:
+    - Map: {:retrieve_customer {:trust :restore}}
+    - Vector of maps: [{:name \"retrieve_customer\" :trust :restore}]"
   [mcp-config server-name tool-name]
   (let [servers (:servers mcp-config)
         server (get servers (keyword server-name))]
@@ -177,8 +181,16 @@
       :none
       (let [server-trust (or (:trust server) :none)
             tool-configs (:tools server)
-            tool-config (when (map? tool-configs)
-                          (get tool-configs (keyword tool-name)))
+            tool-config (cond
+                          ;; :tools is a map: {:tool-name config}
+                          (map? tool-configs)
+                          (get tool-configs (keyword tool-name))
+
+                          ;; :tools is a vector: [{:name "tool" :trust :restore}]
+                          (sequential? tool-configs)
+                          (some #(when (= (:name %) (str tool-name)) %) tool-configs)
+
+                          :else nil)
             tool-trust (or (:trust tool-config) :none)]
         (cond
           (= tool-trust :block) :block

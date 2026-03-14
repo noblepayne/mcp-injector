@@ -94,14 +94,15 @@
      :detected (distinct (concat (:detected regex-result) env-detections entropy-detected))}))
 
 (defn generate-token
-  "Generate a deterministic, truncated SHA-256 hash token."
+  "Generate a deterministic, truncated SHA-256 hash token.
+   Uses 12 hex chars (48 bits) to reduce collision probability."
   [label value salt]
   (let [input (str (name label) "|" value "|" salt)
         digest (.digest (MessageDigest/getInstance "SHA-256") (.getBytes input))
         hash-str (->> digest
                       (map (partial format "%02x"))
                       (apply str))
-        truncated (subs hash-str 0 8)]
+        truncated (subs hash-str 0 12)]
     (str "[" (name label) "_" truncated "]")))
 
 (defn- redact-string-value
@@ -129,19 +130,21 @@
 
 (defn redact-data
   "Recursively walk a data structure, redact string values, store in vault.
-   Returns [redacted-data vault-atom]"
+    Returns [redacted-data vault-atom detected-labels]"
   ([data config]
    (redact-data data config (atom {})))
   ([data config vault]
    (let [config-with-vault (assoc config :vault vault)
+         detected-labels (atom [])
          redacted (walk/postwalk
                    (fn [x]
                      (if (string? x)
-                       (let [[redacted-text _ _] (redact-string-value x config-with-vault)]
+                       (let [[redacted-text _ detected] (redact-string-value x config-with-vault)]
+                         (when detected (swap! detected-labels conj detected))
                          redacted-text)
                        x))
                    data)]
-     [redacted vault])))
+     [redacted vault @detected-labels])))
 
 (defn restore-tokens
   "Recursively walk a data structure, replacing tokens with original values from vault."

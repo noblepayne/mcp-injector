@@ -169,6 +169,8 @@
         (= full-name "clojure-eval")
         (try
           (let [code (:code args)
+                ;; NOTE: clojure-eval is a full JVM/Babashka load-string.
+                ;; Security is currently enforced only via the Policy layer (explicit opt-in).
                 result (load-string code)]
             (json/generate-string result))
           (catch Exception e
@@ -214,9 +216,10 @@
                      ;; Only redact user/system messages - assistant tool results are already handled
                      (or (= role "system") (= role "user"))
                      ;; Skip if already contains PII tokens (avoid double-redaction)
-                     (not (re-find #"\[PII_[A-Z_]+_[a-f0-9]{8}\]" content)))
+                     ;; Token format: [LABEL_hex8] e.g., [EMAIL_ADDRESS_a35e2662]
+                     (not (re-find #"\[[A-Z_]+_[a-f0-9]{8,}\]" content)))
               (let [config {:mode :replace :salt request-id}
-                    [redacted-content _] (pii/redact-data content config vault)]
+                    [redacted-content _ _] (pii/redact-data content config vault)]
                 (assoc m :content redacted-content))
               m)))
         messages))
@@ -238,31 +241,31 @@
         parsed (try (json/parse-string raw-output true) (catch Exception _ nil))
         ;; If parsed successfully, redact the data structure; otherwise redact the string
         ;; Special handling for MCP response format: parse nested :text field if present
-        [redacted new-vault] (if parsed
-                               (let [;; Check if this is MCP response format with :text field containing JSON
-                                     ;; Handle both map and sequential (vector/list/lazy-seq) responses
-                                     parsed (cond
-                                              (map? parsed)
-                                              (if (string? (:text parsed))
-                                                (try (assoc parsed :text (json/parse-string (:text parsed) true))
-                                                     (catch Exception _ parsed))
-                                                parsed)
-                                              (sequential? parsed)
-                                              (mapv (fn [item]
-                                                      (if (and (map? item) (string? (:text item)))
-                                                        (try (assoc item :text (json/parse-string (:text item) true))
-                                                             (catch Exception _ item))
-                                                        item))
-                                                    parsed)
-                                              :else parsed)
-                                     config {:mode :replace :salt request-id}
-                                     [redacted-struct vault-after] (pii/redact-data parsed config vault)]
-                                 [(json/generate-string redacted-struct) vault-after])
-                               (let [config {:mode :replace :salt request-id}
-                                     [redacted-str vault-after] (pii/redact-data raw-output config vault)]
-                                 [redacted-str vault-after]))
-        ;; For logging, we still scan the raw output
-        detected (:detected (pii/scan-and-redact raw-output {:mode :replace}))]
+        [redacted new-vault detected] (if parsed
+                                        (let [;; Check if this is MCP response format with :text field containing JSON
+                                              ;; Handle both map and sequential (vector/list/lazy-seq) responses
+                                              parsed (cond
+                                                       (map? parsed)
+                                                       (if (string? (:text parsed))
+                                                         (try (assoc parsed :text (json/parse-string (:text parsed) true))
+                                                              (catch Exception _ parsed))
+                                                         parsed)
+                                                       (sequential? parsed)
+                                                       (mapv (fn [item]
+                                                               (if (and (map? item) (string? (:text item)))
+                                                                 (try (assoc item :text (json/parse-string (:text item) true))
+                                                                      (catch Exception _ item))
+                                                                 item))
+                                                             parsed)
+                                                       :else parsed)
+                                              config {:mode :replace :salt request-id}
+                                              [redacted-struct vault-after detected-labels] (pii/redact-data parsed config vault)]
+                                          [(json/generate-string redacted-struct) vault-after detected-labels])
+                                        (let [config {:mode :replace :salt request-id}
+                                              [redacted-str vault-after detected-labels] (pii/redact-data raw-output config vault)]
+                                          [redacted-str vault-after detected-labels]))]
+
+    ;; Log the detected PII types (not scanning again)
     (when (seq detected)
       (log-request "info" "PII Redacted in Tool Output" {:labels detected} {}))
     [redacted new-vault]))
