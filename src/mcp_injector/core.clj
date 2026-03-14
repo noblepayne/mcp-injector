@@ -206,12 +206,6 @@
       [(subs t-name 0 idx) (subs t-name (+ idx 2))])
     [nil full-name]))
 
-(defn- get-server-from-tool
-  "Extract server name from tool name"
-  [full-name]
-  (let [[server _] (parse-tool-name full-name)]
-    server))
-
 (defn- scrub-messages [messages vault request-id]
   (mapv (fn [m]
           (let [content (:content m)
@@ -230,8 +224,8 @@
 (defn- restore-tool-args
   "Restore tokens in tool args if server is trusted"
   [args vault mcp-servers full-tool-name]
-  (let [server (get-server-from-tool full-tool-name)
-        trust (when server (config/get-server-trust mcp-servers server nil))
+  (let [[server tool] (parse-tool-name full-tool-name)
+        trust (when server (config/get-server-trust mcp-servers server tool))
         restored (if (= trust :restore)
                    (pii/restore-tokens args vault)
                    args)]

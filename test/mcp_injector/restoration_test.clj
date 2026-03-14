@@ -1,5 +1,6 @@
 (ns mcp-injector.restoration-test
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
+            [clojure.string :as str]
             [mcp-injector.test-llm-server :as test-llm]
             [mcp-injector.test-mcp-server :as test-mcp]
             [mcp-injector.core :as core]
@@ -77,13 +78,26 @@
         (is (= 200 (:status response)))
 
         ;; Verify MCP received the RESTORED value in the second call
-        (let [requests @(:received-requests mcp)
-              tool-calls (filter #(= "tools/call" (-> % :body :method)) requests)
+        (let [mcp-requests @(:received-requests mcp)
+              tool-calls (filter #(= "tools/call" (-> % :body :method)) mcp-requests)
               update-call (last tool-calls)
               ;; Arguments in MCP request is a JSON string, parse it
               args-str (-> update-call :body :params :arguments)
               args (json/parse-string args-str true)]
-          (is (= "wes@example.com" (:email args))))))))
+          (is (= "wes@example.com" (:email args))))
+
+        ;; Verify LLM received REDACTED token (not original) in tool result
+        (let [llm-requests @(:received-requests llm)
+              ;; Find the request where LLM called tool (has tool_calls)
+              tool-call-req (first (filter #(get-in % [:messages (dec (count (:messages %))) :tool_calls]) llm-requests))
+              ;; Get the tool result message that follows the tool call
+              msgs (:messages tool-call-req)
+              tool-result-msg (last msgs)]
+          ;; LLM should see token, not original email
+          (is (some? tool-result-msg))
+          (is (= "tool" (:role tool-result-msg)))
+          (is (str/includes? (:content tool-result-msg) "[EMAIL_ADDRESS_a35e2662]"))
+          (is (not (str/includes? (:content tool-result-msg) "wes@example.com"))))))))
 
 (defn -main [& _args]
   (let [result (clojure.test/run-tests 'mcp-injector.restoration-test)]
