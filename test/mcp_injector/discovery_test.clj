@@ -78,7 +78,7 @@
       (is (= 200 (:status response)))
       (is (str/includes? (get-in first-req [:messages 0 :content]) "mcp__stripe"))
       (is (some (fn [t] (= "get_tool_schema" (get-in t [:function :name]))) (get-in first-req [:tools])))
-      (is (some (fn [m] (str/includes? (:content m) "customer@example.com")) tool-msgs)))))
+      (is (some (fn [m] (str/includes? (:content m) "[EMAIL_ADDRESS]")) tool-msgs)))))
 
 (deftest tool-discovery-filtering-nil-shows-all
   (testing "When :tools is nil, all discovered tools from MCP server should be shown"

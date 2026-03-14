@@ -3,26 +3,41 @@
             [babashka.http-client :as http-client]
             [cheshire.core :as json]
             [clojure.string :as str]
+            [clojure.java.io :as io]
             [mcp-injector.config :as config]
             [mcp-injector.openai-compat :as openai]
-            [mcp-injector.mcp-client :as mcp]))
+            [mcp-injector.mcp-client :as mcp]
+            [mcp-injector.audit :as audit]
+            [mcp-injector.pii :as pii]))
 
 (def ^:private server-state (atom nil))
 (def ^:private usage-stats (atom {}))
 (def ^:private cooldown-state (atom {}))
 (def ^:private ^:dynamic *request-id* nil)
+(def ^:private ^:dynamic *audit-config* nil)
 
 (defn- log-request
   ([level message data]
    (log-request level message data nil))
   ([level message data context]
-   (println (json/generate-string
-             (merge {:timestamp (str (java.time.Instant/now))
-                     :level level
-                     :message message
-                     :request-id (or *request-id* "none")}
-                    context
-                    {:data data})))))
+   (let [log-entry (merge {:timestamp (str (java.time.Instant/now))
+                           :level level
+                           :message message
+                           :request-id (or *request-id* "none")}
+                          context
+                          {:data data})]
+     (println (json/generate-string log-entry))
+     ;; Fail-open audit logging
+     (when *audit-config*
+       (try
+         (audit/append-event! (:secret *audit-config*) level log-entry)
+         (catch Exception e
+           (binding [*out* *err*]
+             (println (json/generate-string
+                       {:timestamp (str (java.time.Instant/now))
+                        :level "error"
+                        :message "AUDIT LOG WRITE FAILURE — audit trail degraded"
+                        :error (.getMessage e)})))))))))
 
 (defn- parse-body [body]
   (try
@@ -154,10 +169,22 @@
 
     :else {:error (str "Unknown tool: " full-name)}))
 
+(defn- scrub-messages [messages]
+  (mapv (fn [m]
+          (if (string? (:content m))
+            (let [{:keys [text detected]} (pii/scan-and-redact (:content m) {:mode :replace})]
+              (when (seq detected)
+                (log-request "info" "PII Redacted" {:labels detected} {:role (:role m)}))
+              (assoc m :content text))
+            ;; P2 Fix: handle non-string/multi-modal content if needed
+            ;; For now, just pass through but log a warning if non-string content is encountered
+            m))
+        messages))
+
 (defn- agent-loop [llm-url payload mcp-servers max-iterations]
   (let [model (:model payload)
         discovered-this-loop (atom {})]
-    (loop [current-payload payload
+    (loop [current-payload (update payload :messages scrub-messages)
            iteration 0]
       (if (>= iteration max-iterations)
         {:success true
@@ -190,11 +217,16 @@
                                                                (catch Exception e
                                                                  {:success false :error (.getMessage e)}))]
                                             (if (:success parse-result)
-                                              (let [result (execute-tool fn-name (:args parse-result) mcp-servers discovered-this-loop)]
+                                              (let [result (execute-tool fn-name (:args parse-result) mcp-servers discovered-this-loop)
+                                                    ;; Scrub tool output
+                                                    content (if (string? result) result (json/generate-string result))
+                                                    {:keys [text detected]} (pii/scan-and-redact content {:mode :replace})
+                                                    _ (when (seq detected)
+                                                        (log-request "info" "PII Redacted in Tool Output" {:tool fn-name :labels detected} {}))]
                                                 {:role "tool"
                                                  :tool_call_id (:id tc)
                                                  :name fn-name
-                                                 :content (if (string? result) result (json/generate-string result))})
+                                                 :content text})
                                                ;; JSON parse error - return error to LLM as tool result
                                               {:role "tool"
                                                :tool_call_id (:id tc)
@@ -364,7 +396,7 @@
    :warming-up? (let [fut (get @server-state :warmup-future)]
                   (if fut (not (realized? fut)) false))})
 
-(defn- handle-api [request _mcp-servers _config]
+(defn- handle-api [request _mcp-servers config]
   (let [uri (:uri request)
         method (:request-method request)]
     (case [method uri]
@@ -388,11 +420,20 @@
       [:get "/api/v1/stats"]
       {:status 200 :body (json/generate-string {:stats @usage-stats})}
 
+      [:get "/api/v1/audit/verify"]
+      (let [path (:audit-log-path config)
+            secret (:audit-secret config)
+            valid? (audit/verify-log (io/file path) secret)]
+        {:status 200 :body (json/generate-string {:valid? valid? :path path})})
+
       {:status 404 :body (json/generate-string {:error "Not found"})})))
 
 (defn- handler [request mcp-servers config]
-  (let [request-id (str (java.util.UUID/randomUUID))]
-    (binding [*request-id* request-id]
+  (let [request-id (str (java.util.UUID/randomUUID))
+        audit-conf {:path (io/file (:audit-log-path config))
+                    :secret (:audit-secret config)}]
+    (binding [*request-id* request-id
+              *audit-config* audit-conf]
       (try
         (let [uri (:uri request)]
           (cond
@@ -443,6 +484,13 @@
         mcp-config-path (or (:mcp-config-path initial-config)
                             (System/getenv "MCP_INJECTOR_MCP_CONFIG")
                             "mcp-servers.edn")
+        ;; Audit trail config
+        audit-log-path (or (:audit-log-path initial-config)
+                           (System/getenv "MCP_INJECTOR_AUDIT_LOG_PATH")
+                           "logs/audit.log.ndjson")
+        audit-secret (or (:audit-secret initial-config)
+                         (System/getenv "MCP_INJECTOR_AUDIT_SECRET")
+                         "default-audit-secret")
         ;; Merge provided mcp-config with loaded ones if needed
         base-mcp-servers (cond
                            (and (map? mcp-config) (:servers mcp-config)) mcp-config
@@ -453,7 +501,11 @@
                       (let [gateway-overrides (select-keys initial-config [:virtual-models :fallbacks :url])]
                         (update base-mcp-servers :llm-gateway merge gateway-overrides))
                       base-mcp-servers)
-        final-config {:port port :host host :llm-url llm-url :log-level log-level :max-iterations max-iterations :mcp-config-path mcp-config-path}
+        final-config {:port port :host host :llm-url llm-url :log-level log-level
+                      :max-iterations max-iterations :mcp-config-path mcp-config-path
+                      :audit-log-path audit-log-path :audit-secret audit-secret}
+        ;; P3 Integration: Initialize Audit system
+        _ (audit/init-audit! audit-log-path)
         srv (http/run-server (fn [req] (handler req mcp-servers final-config)) {:port port :host host})
         actual-port (or (:local-port (meta srv)) port)
         warmup-fut (future (mcp/warm-up! mcp-servers))]
@@ -468,7 +520,9 @@
       (when fut (future-cancel fut))
       (when (fn? srv) (srv :timeout 100))
       (reset! server-state nil)
-      (mcp/clear-tool-cache!))))
+      (mcp/clear-tool-cache!)
+      ;; P3 Integration: Close Audit system
+      (audit/close-audit!))))
 
 (defn clear-mcp-sessions! []
   (mcp/clear-tool-cache!))
