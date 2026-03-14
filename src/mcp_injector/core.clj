@@ -8,7 +8,8 @@
             [mcp-injector.openai-compat :as openai]
             [mcp-injector.mcp-client :as mcp]
             [mcp-injector.audit :as audit]
-            [mcp-injector.pii :as pii]))
+            [mcp-injector.pii :as pii]
+            [mcp-injector.policy :as policy]))
 
 (def ^:private server-state (atom nil))
 (def ^:private usage-stats (atom {}))
@@ -119,55 +120,62 @@
                                          :total-tokens (+ total (or (:total-tokens existing) 0))
                                          :last-updated (System/currentTimeMillis)})))))
 
-(defn- execute-tool [full-name args mcp-servers discovered-this-loop]
-  (cond
-    (= full-name "get_tool_schema")
-    (let [full-tool-name (:tool args)
-          ;; Parse prefixed name: mcp__server__tool -> [server tool]
-          [s-name t-name] (if (and full-tool-name (str/includes? full-tool-name "__"))
-                            (let [idx (str/last-index-of full-tool-name "__")]
-                              [(subs full-tool-name 5 idx) (subs full-tool-name (+ idx 2))])
-                            [nil nil])
-          s-config (when s-name (get-in mcp-servers [:servers (keyword s-name)]))]
-      (if (and s-name s-config t-name)
-        (let [schema (mcp/get-tool-schema (name s-name) s-config t-name)]
-          (if (:error schema)
-            schema
-            (do
-              (swap! discovered-this-loop assoc full-tool-name schema)
-              schema)))
-        {:error (str "Invalid tool name. Use format: mcp__server__tool (e.g., mcp__stripe__retrieve_customer). Got: " full-tool-name)}))
+(defn- execute-tool [full-name args mcp-servers discovered-this-loop governance context]
+  (let [policy-result (policy/allow-tool? (:policy governance) full-name context)]
+    (if-not (:allowed? policy-result)
+      (do
+        (log-request "warn" "Tool Blocked by Policy" {:tool full-name :reason (:reason policy-result)} context)
+        {:error (str "Policy violation: " (:reason policy-result))})
+      (cond
+        (= full-name "get_tool_schema")
+        (let [full-tool-name (:tool args)
+              ;; Parse prefixed name: mcp__server__tool -> [server tool]
+              [s-name t-name] (if (and full-tool-name (str/includes? full-tool-name "__"))
+                                (let [idx (str/last-index-of full-tool-name "__")]
+                                  [(subs full-tool-name 5 idx) (subs full-tool-name (+ idx 2))])
+                                [nil nil])
+              s-config (when s-name (get-in mcp-servers [:servers (keyword s-name)]))]
+          (if (and s-name s-config t-name)
+            (let [schema (mcp/get-tool-schema (name s-name) s-config t-name (:policy governance))]
+              (if (:error schema)
+                schema
+                (do
+                  (swap! discovered-this-loop assoc full-tool-name schema)
+                  schema)))
+            {:error (str "Invalid tool name. Use format: mcp__server__tool (e.g., mcp__stripe__retrieve_customer). Got: " full-tool-name)}))
 
-    (= full-name "clojure-eval")
-    (try
-      (let [code (:code args)
-            result (load-string code)]
-        (pr-str result))
-      (catch Exception e
-        {:error (str "Eval error: " (.getMessage e))}))
+        (= full-name "clojure-eval")
+        (try
+          (let [code (:code args)
+                ;; NOTE: clojure-eval is a full JVM/Babashka load-string. 
+                ;; Security is currently enforced only via the Policy layer (explicit opt-in).
+                result (load-string code)]
+            (pr-str result))
+          (catch Exception e
+            {:error (str "Eval error: " (.getMessage e))}))
 
-    (str/starts-with? full-name "mcp__")
-    (let [t-name (str/replace full-name #"^mcp__" "")
-          [s-name real-t-name] (if (str/includes? t-name "__")
-                                 (let [idx (str/last-index-of t-name "__")]
-                                   [(subs t-name 0 idx) (subs t-name (+ idx 2))])
-                                 [nil t-name])
-          s-config (when s-name (get-in mcp-servers [:servers (keyword s-name)]))]
-      (if (and s-name s-config)
-        (let [result (mcp/call-tool (name s-name) s-config real-t-name args)
-              ;; Auto-discover: add schema to discovered-this-loop so next turn has it
-              _ (when-not (contains? result :error)
-                  (let [schema (mcp/get-tool-schema (name s-name) s-config real-t-name)]
-                    (when-not (:error schema)
-                      (swap! discovered-this-loop assoc full-name schema))))]
-          result)
-        (if-let [_ (get @discovered-this-loop full-name)]
-          (let [[_ s-name-auto real-t-auto] (str/split full-name #"__" 3)
-                s-conf-auto (get-in mcp-servers [:servers (keyword s-name-auto)])]
-            (mcp/call-tool (name s-name-auto) s-conf-auto real-t-auto args))
-          {:error (str "Unknown tool: " full-name ". Use get_tool_schema with full prefixed name first.")})))
+        (str/starts-with? full-name "mcp__")
+        (let [t-name (str/replace full-name #"^mcp__" "")
+              [s-name real-t-name] (if (str/includes? t-name "__")
+                                     (let [idx (str/last-index-of t-name "__")]
+                                       [(subs t-name 0 idx) (subs t-name (+ idx 2))])
+                                     [nil t-name])
+              s-config (when s-name (get-in mcp-servers [:servers (keyword s-name)]))]
+          (if (and s-name s-config)
+            (let [result (mcp/call-tool (name s-name) s-config real-t-name args (:policy governance))
+                  ;; Auto-discover: add schema to discovered-this-loop so next turn has it
+                  _ (when-not (contains? result :error)
+                      (let [schema (mcp/get-tool-schema (name s-name) s-config real-t-name (:policy governance))]
+                        (when-not (:error schema)
+                          (swap! discovered-this-loop assoc full-name schema))))]
+              result)
+            (if-let [_ (get @discovered-this-loop full-name)]
+              (let [[_ s-name-auto real-t-auto] (str/split full-name #"__" 3)
+                    s-conf-auto (get-in mcp-servers [:servers (keyword s-name-auto)])]
+                (mcp/call-tool (name s-name-auto) s-conf-auto real-t-auto args (:policy governance)))
+              {:error (str "Unknown tool: " full-name ". Use get_tool_schema with full prefixed name first.")})))
 
-    :else {:error (str "Unknown tool: " full-name)}))
+        :else {:error (str "Unknown tool: " full-name)}))))
 
 (defn- scrub-messages [messages]
   (mapv (fn [m]
@@ -176,14 +184,13 @@
               (when (seq detected)
                 (log-request "info" "PII Redacted" {:labels detected} {:role (:role m)}))
               (assoc m :content text))
-            ;; P2 Fix: handle non-string/multi-modal content if needed
-            ;; For now, just pass through but log a warning if non-string content is encountered
             m))
         messages))
 
-(defn- agent-loop [llm-url payload mcp-servers max-iterations]
+(defn- agent-loop [llm-url payload mcp-servers max-iterations governance]
   (let [model (:model payload)
-        discovered-this-loop (atom {})]
+        discovered-this-loop (atom {})
+        context {:model model}]
     (loop [current-payload (update payload :messages scrub-messages)
            iteration 0]
       (if (>= iteration max-iterations)
@@ -193,7 +200,7 @@
                                      :content "Maximum iterations reached. Here's what I found so far:"
                                      :tool_calls nil}
                            :finish_reason "length"}]}}
-        (let [_ (log-request "info" "Tool Loop" {:iteration iteration :calls (count (get-in current-payload [:messages]))} {:model model :endpoint llm-url})
+        (let [_ (log-request "info" "Tool Loop" {:iteration iteration :calls (count (get-in current-payload [:messages]))} context)
               resp (call-llm llm-url current-payload)]
           (if-not (:success resp)
             resp
@@ -217,17 +224,16 @@
                                                                (catch Exception e
                                                                  {:success false :error (.getMessage e)}))]
                                             (if (:success parse-result)
-                                              (let [result (execute-tool fn-name (:args parse-result) mcp-servers discovered-this-loop)
+                                              (let [result (execute-tool fn-name (:args parse-result) mcp-servers discovered-this-loop governance context)
                                                     ;; Scrub tool output
                                                     content (if (string? result) result (json/generate-string result))
                                                     {:keys [text detected]} (pii/scan-and-redact content {:mode :replace})
                                                     _ (when (seq detected)
-                                                        (log-request "info" "PII Redacted in Tool Output" {:tool fn-name :labels detected} {}))]
+                                                        (log-request "info" "PII Redacted in Tool Output" {:tool fn-name :labels detected} context))]
                                                 {:role "tool"
                                                  :tool_call_id (:id tc)
                                                  :name fn-name
                                                  :content text})
-                                               ;; JSON parse error - return error to LLM as tool result
                                               {:role "tool"
                                                :tool_call_id (:id tc)
                                                :name fn-name
@@ -311,7 +317,7 @@
                                   msgs)))
         (assoc :tools merged-tools))))
 
-(defn- try-virtual-model-chain [config prepared-req llm-url mcp-servers max-iterations]
+(defn- try-virtual-model-chain [config prepared-req llm-url mcp-servers max-iterations governance]
   (let [chain (:chain config)
         retry-on (set (:retry-on config [429 500]))
         cooldown-mins (get config :cooldown-minutes 5)
@@ -326,7 +332,7 @@
               req (-> prepared-req
                       (assoc :model provider)
                       (dissoc :fallbacks))
-              result (agent-loop llm-url req mcp-servers max-iterations)]
+              result (agent-loop llm-url req mcp-servers max-iterations governance)]
           (if (:success result)
             result
             (if (some #(= % (:status result)) retry-on)
@@ -346,7 +352,7 @@
                                (let [url (or (:url s-conf) (:uri s-conf))
                                      cmd (:cmd s-conf)]
                                  (if (or url cmd)
-                                   (try (assoc acc s-name (mcp/discover-tools (name s-name) s-conf (:tools s-conf)))
+                                   (try (assoc acc s-name (mcp/discover-tools (name s-name) s-conf (:tools s-conf) (:policy (:governance config))))
                                         (catch Exception e
                                           (log-request "warn" "Discovery failed" {:server s-name :error (.getMessage e)} {:model model})
                                           acc))
@@ -358,9 +364,10 @@
           virtual-config (or (get virtual-models model) (get virtual-models (keyword model)))
           prepared-req (prepare-llm-request (assoc chat-req :messages messages) mcp-servers)
           max-iter (or (:max-iterations config) 10)
+          gov (:governance config)
           result (if virtual-config
-                   (try-virtual-model-chain virtual-config prepared-req llm-url mcp-servers max-iter)
-                   (agent-loop llm-url prepared-req mcp-servers max-iter))]
+                   (try-virtual-model-chain virtual-config prepared-req llm-url mcp-servers max-iter gov)
+                   (agent-loop llm-url prepared-req mcp-servers max-iter gov))]
       (if (:success result)
         (let [final-resp (:data result)
               _ (track-usage! model (:usage final-resp))
@@ -501,9 +508,15 @@
                       (let [gateway-overrides (select-keys initial-config [:virtual-models :fallbacks :url])]
                         (update base-mcp-servers :llm-gateway merge gateway-overrides))
                       base-mcp-servers)
+        ;; Unified configuration resolution
+        unified-env {:audit-log-path audit-log-path :audit-secret audit-secret}
+        final-governance (config/resolve-governance (assoc mcp-servers :governance (:governance initial-config)) unified-env)
         final-config {:port port :host host :llm-url llm-url :log-level log-level
                       :max-iterations max-iterations :mcp-config-path mcp-config-path
-                      :audit-log-path audit-log-path :audit-secret audit-secret}
+                      :audit-log-path audit-log-path :audit-secret audit-secret
+                      :governance final-governance}
+        ;; Validate policy at startup
+        _ (policy/validate-policy! (:policy final-governance))
         ;; P3 Integration: Initialize Audit system
         _ (audit/init-audit! audit-log-path)
         srv (http/run-server (fn [req] (handler req mcp-servers final-config)) {:port port :host host})
