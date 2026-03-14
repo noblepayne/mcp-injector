@@ -8,7 +8,7 @@ mcp-injector sits between an agent (like OpenClaw) and LLM gateways. It provides
 
 - ✅ **Virtual model chains** - Define fallback providers with cooldowns.
 - ✅ **Governance Framework** - Declarative tool access policies (Permissive/Strict).
-- ✅ **PII Scanning** - Automatic redaction of sensitive data in prompts and tool outputs.
+- ✅ **PII Scanning & Restoration** - Automatic redaction of sensitive data in prompts. Trusted tools can receive original PII values for secure processing.
 - ✅ **Signed Audit Trail** - Tamper-proof NDJSON logs with ULID and HMAC chaining.
 - ✅ **Provider-Level Observability** - Granular tracking of tokens, requests, and rate-limits per provider.
 - ✅ **Multi-transport MCP** - Support for HTTP and STDIO (local process) MCP servers.
@@ -19,13 +19,16 @@ mcp-injector sits between an agent (like OpenClaw) and LLM gateways. It provides
 mcp-injector includes a robust governance layer configured via the `:governance` key in `mcp-servers.edn` (copy from `mcp-servers.example.edn`).
 
 ### Governance Modes
+
 - `:permissive` (Default): All tools are allowed unless explicitly denied.
 - `:strict`: All tools are denied unless explicitly allowed in the policy.
 
 ### Privileged Tools
+
 Certain high-risk tools (like `clojure-eval`) are marked as **Privileged**. These tools are **always blocked** by default, even in permissive mode, unless explicitly listed in an `:allow` rule.
 
 ### Example Policy
+
 ```clojure
 :governance
 {:mode :permissive
@@ -41,13 +44,32 @@ Certain high-risk tools (like `clojure-eval`) are marked as **Privileged**. Thes
  {:enabled true :mode :replace}}
 ```
 
+### PII Restoration (Smart Vault)
+
+For tools that need access to original PII data (e.g., a Stripe integration that must see real email addresses), configure trust levels:
+
+```clojure
+:servers
+{:stripe
+ {:url "http://localhost:3001/mcp"
+  :trust :restore  ; :none (default), :read, or :restore
+  :tools [{:name "retrieve_customer" :trust :restore}]}}
+```
+
+- **`:none`** (default): Tool receives redacted tokens like `[EMAIL_ADDRESS_a35e2662]`
+- **`:restore`**: Tool receives original values (e.g., `wes@example.com`)
+
+The vault uses deterministic SHA-256 hashing with a per-request salt, ensuring tokens are consistent within a request but not leakable across requests.
+
 ## Quick Start
 
 ### Prerequisites
+
 - [Babashka](https://babashka.org/) installed
 - [Nix](https://nixos.org/) (optional)
 
 ### Installation
+
 ```bash
 nix develop
 bb test
@@ -57,11 +79,13 @@ bb run
 ## Configuration
 
 Copy the example config and customize:
+
 ```bash
 cp mcp-servers.example.edn mcp-servers.edn
 ```
 
 Edit `mcp-servers.edn`:
+
 ```clojure
 {:servers
   {:stripe
