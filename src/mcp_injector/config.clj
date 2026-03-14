@@ -12,7 +12,9 @@
    :mcp-config "./mcp-servers.edn"
    :max-iterations 10
    :log-level "debug"
-   :timeout-ms 1800000})
+   :timeout-ms 1800000
+   :audit-log-path "logs/audit.log.ndjson"
+   :audit-secret "default-audit-secret"})
 
 (defn env-var
   ([name] (System/getenv name))
@@ -38,7 +40,9 @@
    :mcp-config (env-var "MCP_INJECTOR_MCP_CONFIG" (:mcp-config default-config))
    :max-iterations (parse-int (env-var "MCP_INJECTOR_MAX_ITERATIONS") (:max-iterations default-config))
    :log-level (env-var "MCP_INJECTOR_LOG_LEVEL" (:log-level default-config))
-   :timeout-ms (parse-int (env-var "MCP_INJECTOR_TIMEOUT_MS") (:timeout-ms default-config))})
+   :timeout-ms (parse-int (env-var "MCP_INJECTOR_TIMEOUT_MS") (:timeout-ms default-config))
+   :audit-log-path (env-var "MCP_INJECTOR_AUDIT_LOG_PATH" (:audit-log-path default-config))
+   :audit-secret (env-var "MCP_INJECTOR_AUDIT_SECRET" (:audit-secret default-config))})
 
 (defn get-env [name]
   (System/getenv name))
@@ -232,7 +236,13 @@
                              (:timeout-ms file))]
                    (if (string? v) (parse-int v 1800000) (or v (:timeout-ms env))))
      :fallbacks (:fallbacks file)
-     :virtual-models (:virtual-models file)}))
+     :virtual-models (:virtual-models file)
+     :audit-log-path (or (env-var "MCP_INJECTOR_AUDIT_LOG_PATH")
+                         (:audit-log-path file)
+                         (:audit-log-path env))
+     :audit-secret (or (env-var "MCP_INJECTOR_AUDIT_SECRET")
+                       (:audit-secret file)
+                       (:audit-secret env))}))
 
 (defn get-llm-url
   "Get LLM URL: env var overrides config file"
