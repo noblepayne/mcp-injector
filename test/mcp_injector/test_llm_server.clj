@@ -27,10 +27,8 @@
                                                      :arguments (json/generate-string (:arguments tc))}})
                                        (:tool_calls response-data)))}
               :finish_reason (if (:tool_calls response-data) "tool_calls" "stop")}]
-   :usage (or (:usage response-data)
-              {:prompt_tokens 10
-               :completion_tokens 5
-               :total_tokens 15})})
+    ;; Default usage to nil to avoid polluting stats in tests that don't explicitly set it
+   :usage (:usage response-data nil)})
 
 (defn- build-error-response
   "Build an error response"

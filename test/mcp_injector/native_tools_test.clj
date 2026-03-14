@@ -1,5 +1,6 @@
 (ns mcp-injector.native-tools-test
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
+            [clojure.string :as str]
             [cheshire.core :as json]
             [org.httpkit.client :as http]
             [mcp-injector.core :as core]
@@ -14,7 +15,9 @@
                                             :host "127.0.0.1"
                                             :llm-url (str "http://localhost:" (:port llm-server))
                                             :mcp-servers {:servers {}
-                                                          :llm-gateway {:url (str "http://localhost:" (:port llm-server))}}})]
+                                                          :llm-gateway {:url (str "http://localhost:" (:port llm-server))
+                                                                        :governance {:mode :permissive
+                                                                                     :policy {:allow ["clojure-eval"]}}}}})]
     (try
       (binding [*test-llm* llm-server
                 *injector* injector-server]
@@ -96,7 +99,50 @@
                               :messages [{:role "user" :content "test"}]
                               :stream false})
                       :headers {"Content-Type" "application/json"}})]
-      (is (= 200 (:status response))))))
+      (is (= 200 (:status response)))
+
+      ;; Verify the tool executed (not blocked by policy) and returned an error
+      (let [requests @(:received-requests *test-llm*)
+            tool-result (last (:messages (second requests)))]
+        ;; Should contain eval error from clojure-eval execution
+        (is (str/includes? (:content tool-result) "Eval error"))
+        ;; Should NOT contain policy violation messages since clojure-eval is allowed
+        (is (not (str/includes? (:content tool-result) "Policy violation")))
+        (is (not (str/includes? (:content tool-result) "Privileged tool")))))))
+
+(deftest clojure-eval-policy-denial
+  (testing "clojure-eval returns generic error when blocked by policy (no leakage)"
+    ;; Start a temporary injector with clojure-eval NOT allowed
+    (let [llm-port (:port *test-llm*)
+          blocked-injector (core/start-server {:port 0
+                                               :host "127.0.0.1"
+                                               :llm-url (str "http://localhost:" llm-port)
+                                               :mcp-servers {:servers {}
+                                                             :llm-gateway {:url (str "http://localhost:" llm-port)
+                                                                           :governance {:mode :permissive
+                                                                                        :policy {:allow []}}}}})] ;; empty allow list
+      (try
+        (test-llm/set-tool-call-response *test-llm*
+                                         [{:name "clojure-eval"
+                                           :arguments {:code "(+ 1 2)"}}])
+
+        (let [response @(http/post
+                         (str "http://localhost:" (:port blocked-injector) "/v1/chat/completions")
+                         {:body (json/generate-string
+                                 {:model "test-model"
+                                  :messages [{:role "user" :content "test"}]
+                                  :stream false})
+                          :headers {"Content-Type" "application/json"}})]
+          (is (= 200 (:status response)))
+
+          (let [requests @(:received-requests *test-llm*)
+                tool-result (last (:messages (second requests)))]
+            ;; Should contain generic denial, NOT the specific policy reason
+            (is (str/includes? (:content tool-result) "Tool execution denied"))
+            (is (not (str/includes? (:content tool-result) "Privileged tool")))
+            (is (not (str/includes? (:content tool-result) "explicit (literal) allow-rule")))))
+        (finally
+          (core/stop-server blocked-injector))))))
 
 (deftest unknown-tools-fall-through
   (testing "Unknown tools like exec pass through without being caught by our filter"
