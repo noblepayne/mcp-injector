@@ -16,7 +16,8 @@
    :model (get request-body :model "gpt-4o-mini")
    :choices [{:index 0
               :message {:role "assistant"
-                        :content (:content response-data)
+                        :content (or (get-in response-data [:choices 0 :message :content])
+                                     (:content response-data))
                         :tool_calls (when (:tool_calls response-data)
                                       (map-indexed
                                        (fn [idx tc]
