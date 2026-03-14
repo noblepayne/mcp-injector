@@ -33,16 +33,31 @@
        x))
    m))
 
+(defn deep-merge
+  "Recursively merges maps. If keys conflict, the value from the last map wins.
+   Ensures nested defaults are not wiped out by partial user config.
+   If 'new' is nil, the 'old' value is preserved to prevent wiping out defaults."
+  [& maps]
+  (apply merge-with
+         (fn [old new]
+           (cond
+             (nil? new) old
+             (and (map? old) (map? new)) (deep-merge old new)
+             :else new))
+         maps))
+
 (defn load-config []
-  {:port (parse-int (env-var "MCP_INJECTOR_PORT") (:port default-config))
-   :host (env-var "MCP_INJECTOR_HOST" (:host default-config))
-   :llm-url (env-var "MCP_INJECTOR_LLM_URL" (:llm-url default-config))
-   :mcp-config (env-var "MCP_INJECTOR_MCP_CONFIG" (:mcp-config default-config))
-   :max-iterations (parse-int (env-var "MCP_INJECTOR_MAX_ITERATIONS") (:max-iterations default-config))
-   :log-level (env-var "MCP_INJECTOR_LOG_LEVEL" (:log-level default-config))
-   :timeout-ms (parse-int (env-var "MCP_INJECTOR_TIMEOUT_MS") (:timeout-ms default-config))
-   :audit-log-path (env-var "MCP_INJECTOR_AUDIT_LOG_PATH" (:audit-log-path default-config))
-   :audit-secret (env-var "MCP_INJECTOR_AUDIT_SECRET" (:audit-secret default-config))})
+  (let [env-audit-path (env-var "MCP_INJECTOR_AUDIT_LOG_PATH")
+        env-audit-secret (env-var "MCP_INJECTOR_AUDIT_SECRET")]
+    {:port (parse-int (env-var "MCP_INJECTOR_PORT") (:port default-config))
+     :host (env-var "MCP_INJECTOR_HOST" (:host default-config))
+     :llm-url (env-var "MCP_INJECTOR_LLM_URL" (:llm-url default-config))
+     :mcp-config (env-var "MCP_INJECTOR_MCP_CONFIG" (:mcp-config default-config))
+     :max-iterations (parse-int (env-var "MCP_INJECTOR_MAX_ITERATIONS") (:max-iterations default-config))
+     :log-level (env-var "MCP_INJECTOR_LOG_LEVEL" (:log-level default-config))
+     :timeout-ms (parse-int (env-var "MCP_INJECTOR_TIMEOUT_MS") (:timeout-ms default-config))
+     :audit-log-path (or env-audit-path (:audit-log-path default-config))
+     :audit-secret (or env-audit-secret (:audit-secret default-config))}))
 
 (defn get-env [name]
   (System/getenv name))
@@ -214,35 +229,49 @@
   [mcp-config]
   (get-in mcp-config [:llm-gateway :virtual-models] {}))
 
+(defn resolve-governance
+  "Unified governance resolution logic. Prioritizes nested :governance block.
+   Precedence: top-level :governance > :llm-gateway :governance > defaults.
+   Uses deep-merge to preserve nested default settings."
+  [mcp-config env-config]
+  (let [gateway (:llm-gateway mcp-config)
+        gov-user (or (:governance mcp-config) (:governance gateway))
+        defaults {:mode :permissive
+                  :pii {:enabled true :mode :replace}
+                  :audit {:enabled true :path (:audit-log-path env-config)}
+                  :policy {:mode :permissive}}]
+    (deep-merge defaults gov-user)))
+
 (defn get-config
   "Unified config: env vars override config file, with defaults as fallback.
     Priority: env var > config file > default"
   [mcp-config]
   (let [env (load-config)
-        file (:llm-gateway mcp-config)]
+        gateway (:llm-gateway mcp-config)
+        gov (resolve-governance mcp-config env)]
     {:port (:port env)
      :host (:host env)
      :llm-url (or (env-var "MCP_INJECTOR_LLM_URL")
-                  (:url file)
+                  (:url gateway)
                   (:llm-url env))
      :mcp-config (:mcp-config env)
      :max-iterations (let [v (or (env-var "MCP_INJECTOR_MAX_ITERATIONS")
-                                 (:max-iterations file))]
+                                 (:max-iterations gateway))]
                        (if (string? v) (parse-int v 10) (or v (:max-iterations env))))
      :log-level (or (env-var "MCP_INJECTOR_LOG_LEVEL")
-                    (:log-level file)
+                    (:log-level gateway)
                     (:log-level env))
      :timeout-ms (let [v (or (env-var "MCP_INJECTOR_TIMEOUT_MS")
-                             (:timeout-ms file))]
+                             (:timeout-ms gateway))]
                    (if (string? v) (parse-int v 1800000) (or v (:timeout-ms env))))
-     :fallbacks (:fallbacks file)
-     :virtual-models (:virtual-models file)
-     :audit-log-path (or (env-var "MCP_INJECTOR_AUDIT_LOG_PATH")
-                         (:audit-log-path file)
-                         (:audit-log-path env))
-     :audit-secret (or (env-var "MCP_INJECTOR_AUDIT_SECRET")
-                       (:audit-secret file)
-                       (:audit-secret env))}))
+     :fallbacks (:fallbacks gateway)
+     :virtual-models (:virtual-models gateway)
+     :audit-log-path (get-in gov [:audit :path])
+     :audit-secret (or (get-in gov [:audit :secret])
+                       (env-var "MCP_INJECTOR_AUDIT_SECRET")
+                       (:audit-secret env)
+                       "default-audit-secret")
+     :governance gov}))
 
 (defn get-llm-url
   "Get LLM URL: env var overrides config file"

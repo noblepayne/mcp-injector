@@ -31,3 +31,32 @@
     (let [conf {:other {:nested "value"}}
           resolved (config/resolve-server-config conf)]
       (is (= conf resolved)))))
+
+(deftest deep-merge-test
+  (testing "Nested merge preserves defaults"
+    (let [defaults {:audit {:enabled true :path "default.log"}}
+          user {:audit {:path "custom.log"}}
+          result (config/deep-merge defaults user)]
+      (is (= true (get-in result [:audit :enabled])))
+      (is (= "custom.log" (get-in result [:audit :path]))))))
+
+(deftest resolve-governance-precedence-test
+  (testing "Top-level governance wins over gateway"
+    (let [mcp-config {:governance {:mode :strict}
+                      :llm-gateway {:governance {:mode :permissive}}}
+          env {}
+          result (config/resolve-governance mcp-config env)]
+      (is (= :strict (:mode result)))))
+
+  (testing "Gateway governance used if top-level missing"
+    (let [mcp-config {:llm-gateway {:governance {:mode :strict}}}
+          env {}
+          result (config/resolve-governance mcp-config env)]
+      (is (= :strict (:mode result)))))
+
+  (testing "Defaults used if nothing provided"
+    (let [mcp-config {}
+          env {}
+          result (config/resolve-governance mcp-config env)]
+      (is (= :permissive (:mode result)))
+      (is (= true (get-in result [:audit :enabled]))))))
