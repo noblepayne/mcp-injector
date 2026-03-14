@@ -1,19 +1,19 @@
-{:title "Tool Access Control (Guardrails)"
- :description "Declarative predicates that enforce safety boundaries on MCP tool execution."
- :philosophy "Simple predicates (Pure Functions), Fail-fast, Least Privilege."
- :inspired-by "Talon (Policy), Hillel Wayne (State/Constraints)"
+{:title "Tool Access Policy (Guardrails)"
+ :description "Declarative predicates that enforce safety boundaries on MCP and native tool execution."
+ :philosophy "Least Privilege, Fail-fast, Context-aware (Model/User)."
+ :inspired-by "Talon (Policy), Hillel Wayne (Constraints)"
  :implementation-strategy
- {:policy-path "config/policy.edn"
-  :core-fn "mcp-injector.policy/allow-tool?"
-  :logic "Match (server-id, tool-name) against allow/deny lists."}
+ {:core-fn "mcp-injector.policy/allow-tool?"
+  :rule-types [:allow :deny]
+  :matchers [:exact :regex :wildcard]}
  :acceptance-criteria
- ["Policy is an EDN map of rules (e.g., {:allow [\"stripe.*\"] :deny [\"fs.rm\"]})."
-  "Decisions are pure calculations based on (Policy, ToolCall, RequestContext)."
-  "Support 'Dry Run' mode: Log a policy violation but allow the execution (for testing)."
-  "Block execution in `execute-tool` before the MCP client is invoked."
-  "Data-classification-aware: Block high-privilege tools if the request contains PII."]
+ ["Policy is an EDN map (e.g., {:allow [\"mcp__stripe__*\"] :deny [\"fs.rm\"]})."
+  "Support context-aware rules: allow/deny specific tools only for specific models."
+  "Integrate into `execute-tool` to block actions before side effects occur."
+  "Log `tool_blocked` events to the signed Audit Trail including the policy reason."
+  "Support 'dry-run' mode for safe policy testing."]
  :edge-cases
- ["Wildcard expansion performance."
-  "Conflicting rules (Deny always wins)."
-  "LLM confusion when a tool in the manifest is runtime-blocked."]
+ ["Deny always wins in case of conflict."
+  "LLM confusion: returning a clear 'Policy Violation' message so the agent doesn't loop forever."
+  "Wildcard performance on very large tool directories."]
  :depends-on [:audit-trail]}
