@@ -1,0 +1,20 @@
+{:title "PII Scanning and Redaction (Advanced)"
+ :description "Detects and transforms sensitive data, including high-entropy strings (API keys) and context-aware PII."
+ :philosophy "Shannon Entropy (for secrets), Data-driven (EDN), Simple regex (java.util.regex)."
+ :inspired-by "Talon (Patterns), OWASP Top 10 for LLM (2025)"
+ :implementation-strategy
+ {:recognizers-path "config/pii-patterns.edn"
+  :core-fn "mcp-injector.pii/scan-and-redact"
+  :entropy-threshold 3.5
+  :modes [:mask :hash :replace :block]}
+ :acceptance-criteria
+ ["Redaction is a pure function: (String, Config) -> {:text String :detected [Keyword]}."
+  "Identify common EU PII (Email, IBAN, Phone, VAT, IP) via regex."
+  "Detect high-entropy strings (API keys, credentials) via Shannon entropy calculations."
+  "Flag environment variable leakage (matching current ENV values)."
+  "Scrub messages in `prepare-llm-request` and `execute-tool`."]
+ :edge-cases
+ ["False positives in Base64 or binary data (add entropy filters)."
+  "Multimodal data (out of scope)."
+  "Performance on large context windows (chunk scanning)."]
+ :depends-on []}

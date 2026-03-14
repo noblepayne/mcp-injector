@@ -1,0 +1,20 @@
+{:title "Signed Audit Trail (The 'Fact' Log)"
+ :description "An append-only, HMAC-signed record of all system events to ensure non-repudiation and visibility."
+ :philosophy "Event Sourcing (Linear Facts), Data-centric (NDJSON), Content-addressed signatures."
+ :inspired-by "Talon (Evidence), Rich Hickey (Value of Information)"
+ :implementation-strategy
+ {:format :ndjson
+  :storage "logs/audit.log.ndjson"
+  :fields [:id :timestamp :type :data :sig]
+  :signing-alg "HmacSHA256"}
+ :acceptance-criteria
+ ["Every LLM call, tool execution, and policy decision is recorded as an immutable 'Fact'."
+  "Signature covers the current event + the signature of the previous event (Chaining)."
+  "Human-readable NDJSON format for easy grepping and inspection."
+  "Cost and token usage tracking integrated as first-class events."
+  "Signature verification tool: `bb verify-audit-log`."]
+ :edge-cases
+ ["Key rotation: How to verify old logs with a new key?"
+  "Log rotation: Breaking the signature chain during file rotation."
+  "Disk pressure: Automatic compression/archival of old logs."]
+ :depends-on [:pii-redaction]}
