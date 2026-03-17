@@ -195,6 +195,27 @@
           (= server-trust :restore) :restore
           :else :none)))))
 
+;; No-op placeholder that gets replaced
+
+(defn get-passthrough-trust
+  "Get trust level for a non-prefixed (passthrough) tool.
+   Returns :restore, :none, or :block.
+   Precedence: :restore-all shortcut > exact match > wildcard '*' > :none.
+   Trust values can be strings or keywords."
+  [governance tool-name]
+  (let [trust-map (:passthrough-trust governance {})
+        tool-str (if (keyword? tool-name) (name tool-name) (str tool-name))]
+    (cond
+      (or (= trust-map :restore-all) (= trust-map "restore-all") (true? trust-map))
+      :restore
+
+      :else
+      (let [trust (or (get trust-map tool-str)
+                      (get trust-map (keyword tool-str))
+                      (get trust-map "*")
+                      :none)]
+        (keyword trust)))))
+
 (defn get-meta-tool-definitions
   "Get definitions for meta-tools like get_tool_schema and native tools"
   []
@@ -289,9 +310,10 @@
   (let [gateway (:llm-gateway mcp-config)
         gov-user (or (:governance mcp-config) (:governance gateway))
         defaults {:mode :permissive
-                  :pii {:enabled true :mode :replace}
+                  :pii {:enabled true :mode :replace :trust :restore}
                   :audit {:enabled true :path (:audit-log-path env-config)}
-                  :policy {:mode :permissive}}]
+                  :policy {:mode :permissive}
+                  :passthrough-trust :restore-all}]
     (deep-merge defaults gov-user)))
 
 (defn extract-governance

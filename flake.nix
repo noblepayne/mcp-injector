@@ -142,14 +142,14 @@
                  {
                    stripe = {
                      url = "http://localhost:3001/mcp";
-                     trust = "restore";  # "none" (default), "read", or "restore"
+                     trust = "restore";  # "none" (default) or "restore"
                      tools = ["retrieve_customer" "list_charges"];
                    };
                    workspace = {
                      url = "http://localhost:3000/mcp";
                      trust = "restore";
                      tools = [
-                       { name = "read"; trust = "read"; }
+                       { name = "read"; trust = "restore"; }
                        { name = "write"; trust = "restore"; }
                      ];
                    };
@@ -175,8 +175,9 @@
                     default = {
                       enabled = true;
                       mode = "replace";
+                      trust = "restore";  # "none" (redacted), "restore" (tokenized restoration)
                     };
-                    description = "PII scanning configuration.";
+                    description = "PII scanning configuration. Trust levels: none (redacted), restore (tokenized restoration).";
                   };
                   audit = mkOption {
                     type = types.attrs;
@@ -185,6 +186,11 @@
                       path = "logs/audit.log.ndjson";
                     };
                     description = "Audit trail configuration.";
+                  };
+                  passthroughTrust = mkOption {
+                    type = types.attrsOf (types.enum ["none" "restore" "block"]);
+                    default = {};
+                    description = "Trust levels for tools not managed by mcp-injector (e.g., OpenClaw tools).";
                   };
                 };
               };

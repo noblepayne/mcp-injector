@@ -1,61 +1,67 @@
 ;; Governance and security configuration
 ;; Privileged tools like clojure-eval are blocked by default, require explicit allow
- {:governance
-  {:mode :permissive
-   :policy
-   {:allow ["clojure-eval"]}  ;; Allow native clojure-eval tool
-   :pii
-   {:enabled true :mode :replace}
-   :audit
-   {:enabled true :path "logs/audit.log.ndjson"}}
+{:governance
+ {:mode :permissive
+  :policy
+  {:allow ["clojure-eval"]}  ;; Allow native clojure-eval tool
+  :pii
+  {:enabled true :mode :replace :trust :restore}
+  :audit
+  {:enabled true :path "logs/audit.log.ndjson"}
+  ;; NEW: Trust OpenClaw/passthrough tools (read, edit, exec) for PII restoration
+  :passthrough-trust
+  {"read" :restore
+   "edit" :restore
+   "write" :restore
+   "exec" :none}}  ; keep redacted for security
 
-  :servers
-  {:auphonic {:url "http://localhost:3003/mcp"
-              :tools nil
-              :trust "none"}   ; "none" (default) or "restore"
-   :nixos {:cmd ["nix" "run" "github:utensils/mcp-nixos"]
-           :trust "none"}
+ :servers
+ {:auphonic {:url "http://localhost:3003/mcp"
+             :tools nil
+             :trust "none"}   ; "none" (default) or "restore"
+  :nixos {:cmd ["nix" "run" "github:utensils/mcp-nixos"]
+          :trust "none"}
      ;; Example local tool (uncomment to use)
      ;; :filesystem
      ;; {:cmd ["npx" "-y" "@modelcontextprotocol/server-filesystem" "/path/to/allowed/dir"]
      ;;  :trust "restore"  ; allow token restoration for edit/write
      ;;  :tools [{:name "write" :trust "restore"}]}
-   }
+  }
 ;; LLM gateway configuration
-  :llm-gateway
-  {:url "http://prism:8080"
-   :log-level "info" ;; debug|info|warn|error
+ :llm-gateway
+ {:url "http://prism:8080"
+  :log-level "info" ;; debug|info|warn|error
 
    ;; Fallback chain for legacy mode (injected into requests)
-   :fallbacks [{:provider "zen"
-                :model "kimi-k2.5-free"}
-               {:provider "nvidia"
-                :model "moonshotai/kimi-k2.5"}
-               {:provider "openrouter"
-                :model "moonshotai/kimi-k2.5"}]
+  :fallbacks [{:provider "zen"
+               :model "kimi-k2.5-free"}
+              {:provider "nvidia"
+               :model "moonshotai/kimi-k2.5"}
+              {:provider "openrouter"
+               :model "moonshotai/kimi-k2.5"}]
 
    ;; Virtual models with provider chain and cooldown
-   :virtual-models
-   {:brain
+  :virtual-models
+  {:brain
 
-    {:chain [  ;; Tier 1: Top agentic kings — strongest brains when alive
-             "zen/minimax-m2.5-free"                      ;; Free M2.5 — often #1 for coding agents right now
-             "zen/kimi-k2.5-free"                         ;; Free Kimi K2.5 — multimodal/agent swarm leader
-             "zen/glm-4.7-free"                           ;; Free GLM-4.7 — planning/stability beast
+   {:chain [  ;; Tier 1: Top agentic kings — strongest brains when alive
+            "zen/minimax-m2.5-free"                      ;; Free M2.5 — often #1 for coding agents right now
+            "zen/kimi-k2.5-free"                         ;; Free Kimi K2.5 — multimodal/agent swarm leader
+            "zen/glm-4.7-free"                           ;; Free GLM-4.7 — planning/stability beast
 
   ;; NVIDIA-hosted (dev quotas often generous on these quieter ones)
-             "nvidia/minimaxai/minimax-m2.5"              ;; MiniMax on NVIDIA — fast/reliable
-             "nvidia/moonshotai/kimi-k2.5"                ;; Kimi on NVIDIA — good when not overloaded
-             "nvidia/z-ai/glm5"                           ;; GLM-5 — frontier agentic
-             "nvidia/qwen/qwen3-coder-480b-a35b-instruct" ;; Qwen Coder — repo/tool monster
+            "nvidia/minimaxai/minimax-m2.5"              ;; MiniMax on NVIDIA — fast/reliable
+            "nvidia/moonshotai/kimi-k2.5"                ;; Kimi on NVIDIA — good when not overloaded
+            "nvidia/z-ai/glm5"                           ;; GLM-5 — frontier agentic
+            "nvidia/qwen/qwen3-coder-480b-a35b-instruct" ;; Qwen Coder — repo/tool monster
 
   ;; Last-resort paid fallbacks via OpenRouter
-             "openrouter/minimax/minimax-m2.5"
-             "openrouter/moonshotai/kimi-k2.5"
-             "openrouter/z-ai/glm5"
-             "openrouter/qwen/qwen3-coder-480b-a35b-instruct"]
-     :cooldown-minutes 5
+            "openrouter/minimax/minimax-m2.5"
+            "openrouter/moonshotai/kimi-k2.5"
+            "openrouter/z-ai/glm5"
+            "openrouter/qwen/qwen3-coder-480b-a35b-instruct"]
+    :cooldown-minutes 5
       ;; Default retry-on includes: 400-404, 429, 500, 503
       ;; Override to customize: :retry-on [429 500] 
-     :retry-on [400 401 402 403 404 429 500 503]}}}}
+    :retry-on [400 401 402 403 404 429 500 503]}}}}
 

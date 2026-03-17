@@ -1,0 +1,13 @@
+{:title "Minimal Agent Kernel"
+ :description "Refactor mcp-injector to act as a semi-transparent kernel that handles internal tools recursively before handing off to Gateway."
+ :acceptance-criteria
+ ["Kernel executes internal tools (mcp__*, clojure-eval, get_tool_schema) and recurs."
+  "Kernel hands off to Gateway ONLY when tool batch is 100% passthrough tools."
+  "PII is restored for trusted tools at the membrane (last second before exec/handoff)."
+  "All tool results are redacted before being added to history."
+  "Mixed batches result in internal execution followed by recursion (Strict Priority)."]
+ :edge-cases
+ ["Malformed JSON tool arguments do not crash the kernel."
+  "Mixed internal/passthrough batches do not leak half-baked context to Gateway."
+  "Trust rules (:block) are honored at the passthrough handoff boundary."]
+ :depends-on [:pii-restoration :governance-hardening]}

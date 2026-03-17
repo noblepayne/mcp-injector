@@ -1,18 +1,15 @@
-{:session-id "2026-03-17-007"
- :started "2026-03-17T12:00:00Z"
+{:session-id "2026-03-17-008"
+ :started "2026-03-17T22:30:00Z"
  :active-tasks []
- :completed-this-session [:pii-governance-fix :pii-restoration :runtime-hardening :observability]
- :notes "Completed full hardening PR:
-- Fixed governance.pii.enabled and audit.enabled config toggles
-- Implemented PII Smart Vault with token->value mapping
-- Added clojure-eval timeout (5s) and recursion depth limit (20 levels)
-- Expanded PII patterns: AWS keys, GitHub tokens, Stripe, DB URLs
-- Added monotonic timing (nanoTime) for sub-ms observability
-- Added once-only audit init warning
-- Refactored config purity (resolved at startup, threaded via ctx map)
-- Added peer review process to AGENTS.md
-- All 71 tests passing, lint/format clean
-- Organized specs into dev/specs/completed/"
+ :completed-this-session [:minimal-agent-kernel :strict-priority-handoff :governance-membrane :uniform-trust]
+ :notes "Implemented Minimal Agent Kernel architecture:
+- Refactored agent-loop to implement Strict Priority handoff logic.
+- Kernel executes internal tools (mcp__*, clojure-eval, get_tool_schema) and recurs.
+- Kernel hands off to Gateway ONLY when batch is exclusively passthrough tools.
+- Implemented Context-Aware Membrane for PII restoration at tool/handoff boundary.
+- Enforced tool result redaction for all tools before history update.
+- Updated config to trust all tools by default (:passthrough-trust :restore-all).
+- Optimized get-passthrough-trust for strict string key normalization.
+- All tests passing, lint/format verified rock solid."
  :next-steps ["Merge PR to main"
-              "Monitor production logs for PII detection"
-              "Test clojure-eval timeout in production"]}
+              "Monitor Gateway context quality during mixed-batch scenarios"]}

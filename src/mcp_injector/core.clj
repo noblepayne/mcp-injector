@@ -43,6 +43,15 @@
 (def ^:private ^:dynamic *request-id* nil)
 (def ^:private ^:dynamic *audit-config* nil)
 
+;; Tool categorization for Strict Priority logic
+(def ^:private INTERNAL_TOOLS #{"get_tool_schema" "clojure-eval"})
+
+(defn- internal-call?
+  "Returns true if tool-name is managed by mcp-injector (internal to the kernel)."
+  [tool-name]
+  (or (INTERNAL_TOOLS tool-name)
+      (and tool-name (str/starts-with? tool-name "mcp__"))))
+
 (def ^:private eval-accident-tripwires
   "Catches common dangerous patterns emitted by hallucinating LLMs.
    NOT a security boundary — string-search is trivially bypassed.
@@ -271,17 +280,21 @@
      [[] vault]
      messages)))
 
-(defn- restore-tool-args [args vault mcp-servers full-tool-name]
+(defn- restore-tool-args [args vault mcp-servers full-tool-name governance]
   (let [[server tool] (parse-tool-name full-tool-name)
-        trust (when server (config/get-server-trust mcp-servers server tool))]
-    (case trust
-      :restore (pii/restore-tokens args vault)
-      :block (let [args-str (if (string? args) args (json/generate-string args))
-                   has-tokens (re-find #"\[[A-Z_]+_[a-f0-9]+\]" args-str)]
-               (if has-tokens
-                 :pii-blocked
-                 args))
-      args)))
+        trust (if server
+                (config/get-server-trust mcp-servers server tool)
+                (config/get-passthrough-trust governance full-tool-name))]
+    (if (nil? args)
+      nil
+      (case trust
+        :restore (pii/restore-tokens args vault)
+        :block (let [args-str (if (string? args) args (json/generate-string args))
+                     has-tokens (re-find #"\[[A-Z_]+_[a-f0-9]+\]" args-str)]
+                 (if has-tokens
+                   :pii-blocked
+                   args))
+        args))))
 
 (defn- redact-tool-output [raw-output vault request-id governance]
   (let [pii-enabled (get-in governance [:pii :enabled] true)
@@ -312,18 +325,76 @@
       (log-request "info" "PII Redacted in Tool Output" {:labels detected} {}))
     [redacted new-vault]))
 
+(defn- execute-internal-batch
+  "Execute a batch of internal tool calls (mcp__*, clojure-eval, get_tool_schema).
+   Returns [results new-vault new-discovered]."
+  [tool-calls vault-state discovered-state mcp-servers governance context]
+  (reduce
+   (fn [[results-acc vault-acc disc-acc] tc]
+     (let [fn-name (get-in tc [:function :name])
+           args-str (get-in tc [:function :arguments])
+           parse-result (try
+                          {:success true :args (json/parse-string args-str true)}
+                          (catch Exception e
+                            {:success false :error (.getMessage e)}))]
+       (if (:success parse-result)
+         (let [restored-args (restore-tool-args (:args parse-result) vault-acc mcp-servers fn-name governance)]
+           (if (= restored-args :pii-blocked)
+             [(conj results-acc {:role "tool"
+                                 :tool_call_id (:id tc)
+                                 :name fn-name
+                                 :content (json/generate-string {:error "PII Blocked: tool has :trust :block and received redacted tokens"})})
+              vault-acc
+              disc-acc]
+             (let [[result updated-disc] (execute-tool fn-name restored-args mcp-servers disc-acc governance context)
+                   raw-content (if (string? result) result (json/generate-string result))
+                   [redacted updated-vault] (redact-tool-output raw-content vault-acc (:session-id context) governance)]
+               [(conj results-acc {:role "tool"
+                                   :tool_call_id (:id tc)
+                                   :name fn-name
+                                   :content redacted})
+                updated-vault
+                updated-disc])))
+         [(conj results-acc {:role "tool"
+                             :tool_call_id (:id tc)
+                             :name fn-name
+                             :content (json/generate-string
+                                       {:error "Malformed tool arguments JSON"
+                                        :details {:args-str args-str
+                                                  :parse-error (:error parse-result)}})})
+          vault-acc
+          disc-acc])))
+   [[] vault-state discovered-state]
+   tool-calls))
+
+(defn- prepare-passthrough-handoff
+  "Prepare a passthrough tool batch for Gateway handoff.
+   Restores PII based on trust rules, returns updated assistant message."
+  [assistant-message tool-calls vault-state mcp-servers governance]
+  (assoc assistant-message :tool_calls
+         (mapv (fn [tc]
+                 (let [fn-name (get-in tc [:function :name])
+                       args-str (get-in tc [:function :arguments])
+                       ;; Parse arguments safely
+                       args (try (json/parse-string args-str true) (catch Exception _ nil))
+                       restored (if args
+                                  (restore-tool-args args vault-state mcp-servers fn-name governance)
+                                  {:error "Malformed JSON arguments"})]
+                   (if (= restored :pii-blocked)
+                     (assoc-in tc [:function :arguments] (json/generate-string {:error "PII Blocked"}))
+                     (assoc-in tc [:function :arguments] (json/generate-string restored)))))
+               tool-calls)))
+
 (defn- agent-loop [llm-url payload mcp-servers max-iterations governance]
   (let [model (:model payload)
         vault {}
         request-id (or (:request-id payload) (str (java.util.UUID/randomUUID)))
-        ;; Extract session identity for stable PII tokenization
-        ;; Priority: extra_body.session-id > extra_body.user > user > request-id
         session-id (or (get-in payload [:extra_body :session-id])
                        (get-in payload [:extra_body :user])
                        (:user payload)
                        request-id)
         pii-salt (derive-pii-salt session-id)
-        context {:model model :request-id request-id :session-id session-id}
+        context {:model model :request-id request-id :session-id pii-salt}
         _ (when (= session-id request-id)
             (log-request "debug" "No session-id provided. Tokens will be request-scoped (unstable)." {} context))
         [init-messages init-vault] (scrub-messages (:messages payload) vault pii-salt governance)]
@@ -346,55 +417,14 @@
             (let [choices (get-in resp [:data :choices])
                   message (get-in (first choices) [:message])
                   tool-calls (:tool_calls message)]
-              (if-not tool-calls
+              (if-not (seq tool-calls)
                 (assoc resp :provider model)
-                (let [mcp-calls (filter (fn [tc]
-                                          (let [n (get-in tc [:function :name])]
-                                            (or (= n "get_tool_schema")
-                                                (and n (str/starts-with? n "mcp__")))))
-                                        tool-calls)
-                      native-calls (filter #(= (get-in % [:function :name]) "clojure-eval")
-                                           tool-calls)]
-                  (if (and (empty? mcp-calls) (empty? native-calls))
-                    (assoc resp :provider model)
+                (let [internal-calls (filter #(internal-call? (get-in % [:function :name])) tool-calls)
+                      passthrough-calls (filter #(not (internal-call? (get-in % [:function :name]))) tool-calls)]
+                  (if (seq internal-calls)
+                    ;; RULE: Strict Priority. If any internal calls exist, execute them and recur.
                     (let [[results new-vault new-discovered]
-                          (reduce
-                           (fn [[results-acc vault-acc disc-acc] tc]
-                             (let [fn-name (get-in tc [:function :name])
-                                   args-str (get-in tc [:function :arguments])
-                                   parse-result (try
-                                                  {:success true :args (json/parse-string args-str true)}
-                                                  (catch Exception e
-                                                    {:success false :error (.getMessage e)}))]
-                               (if (:success parse-result)
-                                 (let [restored-args (restore-tool-args (:args parse-result) vault-acc mcp-servers fn-name)]
-                                   (if (= restored-args :pii-blocked)
-                                     [(conj results-acc {:role "tool"
-                                                         :tool_call_id (:id tc)
-                                                         :name fn-name
-                                                         :content (json/generate-string {:error "PII Blocked: tool has :trust :block and received redacted tokens"})})
-                                      vault-acc
-                                      disc-acc]
-                                     (let [[result updated-disc] (execute-tool fn-name restored-args mcp-servers disc-acc governance context)
-                                           raw-content (if (string? result) result (json/generate-string result))
-                                           [redacted updated-vault] (redact-tool-output raw-content vault-acc pii-salt governance)]
-                                       [(conj results-acc {:role "tool"
-                                                           :tool_call_id (:id tc)
-                                                           :name fn-name
-                                                           :content redacted})
-                                        updated-vault
-                                        updated-disc])))
-                                 [(conj results-acc {:role "tool"
-                                                     :tool_call_id (:id tc)
-                                                     :name fn-name
-                                                     :content (json/generate-string
-                                                               {:error "Malformed tool arguments JSON"
-                                                                :details {:args-str args-str
-                                                                          :parse-error (:error parse-result)}})})
-                                  vault-acc
-                                  disc-acc])))
-                           [[] vault-state discovered-state]
-                           (concat mcp-calls native-calls))
+                          (execute-internal-batch internal-calls vault-state discovered-state mcp-servers governance context)
                           new-tools (vec (concat (config/get-meta-tool-definitions)
                                                  (map (fn [[name schema]]
                                                         {:type "function"
@@ -410,7 +440,10 @@
                                  (assoc :tools new-tools))
                              post-vault
                              new-discovered
-                             (inc iteration)))))))))))))
+                             (inc iteration)))
+                    ;; RULE: Exclusively passthrough. Hand off to Gateway.
+                    (let [handoff-msg (prepare-passthrough-handoff message passthrough-calls vault-state mcp-servers governance)]
+                      (assoc-in resp [:data :choices 0 :message] handoff-msg))))))))))))
 
 (defn- set-cooldown! [provider minutes]
   (swap! cooldown-state assoc provider (+ (System/currentTimeMillis) (* minutes 60 1000))))
