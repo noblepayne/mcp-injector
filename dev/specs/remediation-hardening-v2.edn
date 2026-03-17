@@ -1,0 +1,14 @@
+{:title "Hardened Remediation & Functional Cleanup"
+ :description "Addressing peer review findings: eliminating hidden atoms, fixing O(N*V) performance bugs, and hardening the clojure-eval 'Escape Hatch' without neutering its power."
+ :acceptance-criteria
+ ["agent-loop is 100% pure: discovered-tools state is threaded via reduce/recur."
+  "pii/restore-tokens uses a single-pass union regex to prevent O(N*V) complexity and token corruption."
+  "clojure-eval implements a 'Nuclear Blacklist' (tripwire) for dangerous system calls."
+  "Audit log explicitly warns at startup if clojure-eval is enabled in the policy."
+  "README.md contains a formal Security Disclosure regarding clojure-eval risk."
+  "Impure calls (System/currentTimeMillis) are moved outside of swap! blocks."]
+ :security-properties
+ {:state-isolation "No shared atoms in request-handling logic"
+  :restoration-safety "Regex-based one-pass restoration prevents nested token corruption"
+  :escape-hatch-hardening "Blacklist-based tripwire for hallucinating LLMs"
+  :disclosure "Explicit RCE-by-design warning for administrators"}}

@@ -1,0 +1,25 @@
+{:title "Runtime Governance Hardening"
+ :description "Hardening the runtime against vulnerabilities identified in the code review"
+ :acceptance-criteria
+ ["Clojure-eval has 5-second timeout to prevent infinite loops"
+  "Redact-impl has recursion depth limit to prevent StackOverflowError"
+  "Default PII patterns include real-world secrets (AWS keys, GitHub tokens, Stripe keys, DB URLs)"
+  "Entropy scanner reduced false positives with stricter character diversity checks"
+  "All existing tests continue to pass"
+  "Performance impact <5% on normal operations"]
+ :edge-cases
+ ["JSON with 10,000 nested objects"
+  "eval with (while true (println \"loop\"))"
+  "AWS keys with hyphens vs underscores"
+  "GitHub tokens in URL format"
+  "Empty strings and nil values"
+  "Concurrent eval calls"]
+ :depends-on [:governance-fix]
+ :implementation-order
+ ["1. Clojure-eval timeout wrapper"
+  "2. Recursion depth limit"
+  "3. Real-world PII patterns"
+  "4. Entropy tuning"]
+ :notes "Based on code review findings from 2025-03-16. Use pragmatic approach - wrap load-string in future with timeout rather than full SCI migration."
+ :risk-level "low"
+ :estimated-effort "1-2 days"}

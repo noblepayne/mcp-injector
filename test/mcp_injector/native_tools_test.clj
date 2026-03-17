@@ -14,10 +14,9 @@
         injector-server (core/start-server {:port 0
                                             :host "127.0.0.1"
                                             :llm-url (str "http://localhost:" (:port llm-server))
-                                            :mcp-servers {:servers {}
-                                                          :llm-gateway {:url (str "http://localhost:" (:port llm-server))
-                                                                        :governance {:mode :permissive
-                                                                                     :policy {:allow ["clojure-eval"]}}}}})]
+                                            :governance {:mode :permissive
+                                                         :policy {:allow ["clojure-eval"]}}
+                                            :mcp-servers {:servers {}}})]
     (try
       (binding [*test-llm* llm-server
                 *injector* injector-server]
@@ -117,10 +116,9 @@
           blocked-injector (core/start-server {:port 0
                                                :host "127.0.0.1"
                                                :llm-url (str "http://localhost:" llm-port)
-                                               :mcp-servers {:servers {}
-                                                             :llm-gateway {:url (str "http://localhost:" llm-port)
-                                                                           :governance {:mode :permissive
-                                                                                        :policy {:allow []}}}}})] ;; empty allow list
+                                               :governance {:mode :permissive
+                                                            :policy {:allow []}}
+                                               :mcp-servers {:servers {}}})] ;; empty allow list
       (try
         ;; Explicitly clear state before starting the denial flow
         (test-llm/clear-responses *test-llm*)
@@ -162,3 +160,119 @@
                               :stream false})
                       :headers {"Content-Type" "application/json"}})]
       (is (= 200 (:status response))))))
+
+(deftest clojure-eval-accident-tripwires
+  (testing "clojure-eval catches accidental dangerous calls (tripwire, not security)"
+    ;; System/exit should be blocked
+    (test-llm/set-tool-call-response *test-llm*
+                                     [{:name "clojure-eval"
+                                       :arguments {:code "(System/exit 0)"}}])
+    (test-llm/set-next-response *test-llm*
+                                {:role "assistant" :content "Error occurred"})
+
+    (let [response @(http/post
+                     (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                     {:body (json/generate-string
+                             {:model "test-model"
+                              :messages [{:role "user" :content "exit"}]
+                              :stream false})
+                      :headers {"Content-Type" "application/json"}})]
+      (is (= 200 (:status response)))
+      (let [requests @(:received-requests *test-llm*)
+            tool-result (last (:messages (second requests)))]
+        (is (str/includes? (:content tool-result) "Security Violation"))
+        (is (not (str/includes? (:content tool-result) "Eval error")))))))
+
+(deftest clojure-eval-blacklist-sh-call
+  (testing "clojure-eval blocks shell command calls"
+    (test-llm/set-tool-call-response *test-llm*
+                                     [{:name "clojure-eval"
+                                       :arguments {:code "(sh \"rm\" \"-rf\" \"/\")"}}])
+    (test-llm/set-next-response *test-llm*
+                                {:role "assistant" :content "Error"})
+
+    (let [response @(http/post
+                     (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                     {:body (json/generate-string
+                             {:model "test-model"
+                              :messages [{:role "user" :content "delete"}]
+                              :stream false})
+                      :headers {"Content-Type" "application/json"}})]
+      (is (= 200 (:status response)))
+      (let [requests @(:received-requests *test-llm*)
+            tool-result (last (:messages (second requests)))]
+        (is (str/includes? (:content tool-result) "Security Violation"))))))
+
+(deftest clojure-eval-blacklist-file-delete
+  (testing "clojure-eval blocks file delete operations"
+    (test-llm/set-tool-call-response *test-llm*
+                                     [{:name "clojure-eval"
+                                       :arguments {:code "(clojure.java.shell/sh \"rm\" \"-rf\" \"/\")"}}])
+    (test-llm/set-next-response *test-llm*
+                                {:role "assistant" :content "Error"})
+
+    (let [response @(http/post
+                     (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                     {:body (json/generate-string
+                             {:model "test-model"
+                              :messages [{:role "user" :content "delete files"}]
+                              :stream false})
+                      :headers {"Content-Type" "application/json"}})]
+      (is (= 200 (:status response)))
+      (let [requests @(:received-requests *test-llm*)
+            tool-result (last (:messages (second requests)))]
+        (is (str/includes? (:content tool-result) "Security Violation"))))))
+
+(deftest clojure-eval-timeout
+  (testing "clojure-eval times out after 5 seconds on infinite loop"
+    (test-llm/set-tool-call-response *test-llm*
+                                     [{:name "clojure-eval"
+                                       :arguments {:code "(while true (Thread/sleep 1000))"}}])
+    (test-llm/set-next-response *test-llm*
+                                {:role "assistant"
+                                 :content "Should timeout"})
+
+    (let [response @(http/post
+                     (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                     {:body (json/generate-string
+                             {:model "test-model"
+                              :messages [{:role "user" :content "Infinite loop"}]
+                              :stream false})
+                      :headers {"Content-Type" "application/json"}})]
+      (is (= 200 (:status response)))
+      (let [requests @(:received-requests *test-llm*)
+            tool-result (last (:messages (second requests)))]
+        ;; Should timeout with eval error
+        (is (str/includes? (:content tool-result) "Eval error"))
+        ;; Should mention timeout or time limit
+        (is (or (str/includes? (:content tool-result) "timeout")
+                (str/includes? (:content tool-result) "time limit")
+                (str/includes? (:content tool-result) "timed out")
+                (str/includes? (:content tool-result) "Evaluation timed out")))))))
+
+(deftest clojure-eval-recursive-infinite
+  (testing "clojure-eval times out on deeply recursive infinite computation"
+    (test-llm/set-tool-call-response *test-llm*
+                                     [{:name "clojure-eval"
+                                       :arguments {:code "(defn rec [] (recur)) (rec)"}}])
+    (test-llm/set-next-response *test-llm*
+                                {:role "assistant"
+                                 :content "Should timeout"})
+
+    (let [response @(http/post
+                     (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                     {:body (json/generate-string
+                             {:model "test-model"
+                              :messages [{:role "user" :content "Recursive infinite"}]
+                              :stream false})
+                      :headers {"Content-Type" "application/json"}})]
+      (is (= 200 (:status response)))
+      (let [requests @(:received-requests *test-llm*)
+            tool-result (last (:messages (second requests)))]
+        ;; Should timeout with eval error
+        (is (str/includes? (:content tool-result) "Eval error"))
+        ;; Should mention timeout or time limit
+        (is (or (str/includes? (:content tool-result) "timeout")
+                (str/includes? (:content tool-result) "time limit")
+                (str/includes? (:content tool-result) "timed out")
+                (str/includes? (:content tool-result) "Evaluation timed out")))))))
