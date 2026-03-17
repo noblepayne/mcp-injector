@@ -1,16 +1,18 @@
-{:session-id "2026-03-16-006"
- :started "2026-03-16T00:00:00Z"
+{:session-id "2026-03-17-007"
+ :started "2026-03-17T12:00:00Z"
  :active-tasks []
- :completed-this-session [:pii-governance-fix]
- :notes "Fixed PII and Audit Governance Configuration:
-- Fixed provided-governance to check base-mcp-servers and llm-gateway locations
-- Updated scrub-messages to check pii-enabled flag from governance config
-- Updated redact-tool-output to check pii-enabled flag from governance config
-- Made audit initialization conditional on audit.enabled
-- Fixed restoration tests to include email in user messages
-- Added comprehensive integration tests for governance functionality
-- All 69 tests passing (217 assertions)
-- Lint and format checks pass"
- :next-steps ["Test restore functionality with real data"
-              "Verify governance config works in production"
-              "Update documentation"]}
+ :completed-this-session [:pii-governance-fix :pii-restoration :runtime-hardening :observability]
+ :notes "Completed full hardening PR:
+- Fixed governance.pii.enabled and audit.enabled config toggles
+- Implemented PII Smart Vault with token->value mapping
+- Added clojure-eval timeout (5s) and recursion depth limit (20 levels)
+- Expanded PII patterns: AWS keys, GitHub tokens, Stripe, DB URLs
+- Added monotonic timing (nanoTime) for sub-ms observability
+- Added once-only audit init warning
+- Refactored config purity (resolved at startup, threaded via ctx map)
+- Added peer review process to AGENTS.md
+- All 71 tests passing, lint/format clean
+- Organized specs into dev/specs/completed/"
+ :next-steps ["Merge PR to main"
+              "Monitor production logs for PII detection"
+              "Test clojure-eval timeout in production"]}

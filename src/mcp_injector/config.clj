@@ -305,12 +305,16 @@
    3. :base-mcp-servers :governance
    4. :llm-gateway :governance
    
-   Returns the governance map or nil if not found."
+   Returns {:config <governance-map> :source <keyword>} or nil if not found."
   [mcp-config]
-  (or (:governance mcp-config)
-      (:governance (:mcp-servers mcp-config))
-      (:governance (:base-mcp-servers mcp-config))
-      (:governance (:llm-gateway mcp-config))))
+  (or (when-let [gov (:governance mcp-config)]
+        {:config gov :source :governance})
+      (when-let [gov (:governance (:mcp-servers mcp-config))]
+        {:config gov :source :mcp-servers})
+      (when-let [gov (:governance (:base-mcp-servers mcp-config))]
+        {:config gov :source :base-mcp-servers})
+      (when-let [gov (:governance (:llm-gateway mcp-config))]
+        {:config gov :source :llm-gateway})))
 
 (defn get-config
   "Unified config: env vars override config file, with defaults as fallback.

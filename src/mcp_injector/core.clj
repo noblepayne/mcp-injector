@@ -671,10 +671,9 @@
                            (and (map? mcp-config) (:servers mcp-config)) mcp-config
                            (:mcp-servers mcp-config) (:mcp-servers mcp-config)
                            :else (config/load-mcp-servers mcp-config-path))
-        provided-governance (or (:governance mcp-config)
-                                (:governance (:mcp-servers mcp-config))
-                                (:governance base-mcp-servers)
-                                (:governance (:llm-gateway base-mcp-servers)))
+        provided-governance (config/extract-governance mcp-config)
+        _ (when provided-governance
+            (log-request "info" "Governance source resolved" {:source (:source provided-governance)}))
         mcp-servers (if (map? mcp-config)
                       (let [gateway-overrides (select-keys mcp-config [:virtual-models :fallbacks :url :governance])
                             merged (update base-mcp-servers :llm-gateway merge gateway-overrides)]
@@ -683,7 +682,7 @@
                           merged))
                       base-mcp-servers)
         unified-env {:audit-log-path audit-log-path :audit-secret audit-secret}
-        final-governance (config/resolve-governance (assoc mcp-servers :governance provided-governance) unified-env)
+        final-governance (config/resolve-governance (assoc mcp-servers :governance (:config provided-governance)) unified-env)
         final-config {:port port :host host :llm-url llm-url :log-level log-level
                       :max-iterations max-iterations :mcp-config-path mcp-config-path
                       :audit-log-path audit-log-path :audit-secret audit-secret

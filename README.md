@@ -52,7 +52,7 @@ For tools that need access to original PII data (e.g., a Stripe integration that
 :servers
 {:stripe
  {:url "http://localhost:3001/mcp"
-  :trust :restore  ; :none (default), :read, or :restore
+  :trust :restore  ; :none (default) or :restore
   :tools [{:name "retrieve_customer" :trust :restore}]}}
 ```
 
