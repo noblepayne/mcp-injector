@@ -7,7 +7,7 @@
 
 We write **situated programs** that are reliable, robust, and data-driven. We reject OOP nonsense in favor of simple, composable systems. This codebase follows the philosophy of grumpy senior developers who've been burned by complexity:
 
----
+______________________________________________________________________
 
 ## Research-First Workflow (Shotgun Pattern)
 
@@ -24,14 +24,16 @@ Before implementing major features, ALWAYS follow this workflow:
 ### 2. Research Phase
 
 Before writing ANY code for a new feature:
+
 1. Read the existing codebase to understand current patterns
-2. Search for existing solutions in the ecosystem
-3. Check if similar functionality exists elsewhere
-4. Ask clarifying questions if requirements are unclear
+1. Search for existing solutions in the ecosystem
+1. Check if similar functionality exists elsewhere
+1. Ask clarifying questions if requirements are unclear
 
 ### 3. Specify Phase
 
 Write a spec before coding that includes:
+
 - What already exists in the codebase
 - What needs to be built
 - Acceptance criteria
@@ -55,7 +57,70 @@ Agent (should ask first):
 - Recommendation: Use LiteLLM
 ```
 
----
+______________________________________________________________________
+
+## Peer Review Process
+
+We value external review from senior colleagues. Before merging significant changes, we prepare a comprehensive review bundle to get a "stern but fair" stamp of approval.
+
+### When to Do a Peer Review
+
+- After completing major features or bug fixes
+- Before merging to main/production branches
+- When addressing security or governance concerns
+
+### The Review Bundle Workflow
+
+1. **Plan & Specify**: Write a spec (in `dev/specs/`) documenting the change
+1. **Implement**: Write code with tests first
+1. **Internal Review**: Run linter, formatter, and full test suite
+1. **Prepare Bundle**: Create a single markdown file containing:
+   - Executive summary and verdict
+   - Bug fixes and new features
+   - Code quality status (lint, tests)
+   - Security review notes
+   - Fresh review prompt for the reviewer
+   - Full git diff from main
+   - Bundled source files (key src and test files)
+1. **Get Sign-off**: Send bundle to senior colleague for review
+1. **Address Feedback**: Implement any fixes they request
+1. **Commit & Push**: Push with confidence
+
+### Bundle Creation (Example)
+
+```bash
+# Create the review bundle
+./bundle.sh \
+  src/mcp_injector/core.clj \
+  src/mcp_injector/config.clj \
+  src/mcp_injector/pii.clj \
+  test/mcp_injector/*_test.clj \
+  README.md \
+  > PEER_REVIEW.md
+
+# Append git diff
+git main..HEAD >> PEER_REVIEW.md
+```
+
+### What Makes a Good Review Bundle
+
+- **Executive Summary**: One paragraph explaining what changed and why
+- **Verdict**: Recommend Approve/Reject/Changes
+- **Code Quality**: Lint status, test results, coverage
+- **Security Notes**: Any vulnerabilities or concerns
+- **Review Prompt**: Specific questions for the reviewer
+- **Full Diff**: Everything the reviewer needs to understand the change
+
+### Review Checklist
+
+- [ ] Does this change behave as documented?
+- [ ] Are there any security regressions?
+- [ ] Is the test coverage adequate?
+- [ ] Are error messages helpful?
+- [ ] Is the code readable and maintainable?
+- [ ] Did we address all feedback from previous reviews?
+
+______________________________________________________________________
 
 ## Test-First Design
 
@@ -71,6 +136,7 @@ We practice **test-driven development with real integration tests**:
 - **Loop state is precious** - Changes to the agent loop must be verified against history persistence. Usage tracking should happen at the provider level to allow for reliability scoring and automated cooldowns.
 
 ### Self-Monitoring Agents
+
 Downstream agents should use the `/api/v1/stats` endpoint to monitor their own consumption and provider reliability. This allows for proactive model switching or budget management without manual intervention.
 
 **Why real servers?**
@@ -142,9 +208,10 @@ LLMs have context windows. Large prompts = fewer tokens for actual work. Keep pr
 - **Injection strategy**: Use `:lazy` (on-demand) over `:full` for large MCP tool sets
 
 When adding new features:
+
 1. Estimate prompt size increase
-2. Check against common model context limits (8K, 32K, 128K)
-3. Design for lazy loading if tools > 20
+1. Check against common model context limits (8K, 32K, 128K)
+1. Design for lazy loading if tools > 20
 
 ### Spec-Driven Development
 
@@ -172,11 +239,13 @@ Store specs in `dev/specs/` directory.
 When adding new tools or modifying system prompts, follow these guidelines to help LLMs reliably use tools:
 
 **1. Unified Prefixed Tool Names**
+
 - Always use `mcp__server__tool` format for ALL tool references
 - Never use non-prefixed tool names (e.g., just `retrieve_customer`)
 - Example: `mcp__stripe__retrieve_customer`
 
 **2. Schema Discovery**
+
 - Get tool schema: `get_tool_schema {:tool "mcp__server__tool"}`
 - Call tool: `mcp__server__tool {:param "value"}`
 - Example:
@@ -186,17 +255,21 @@ When adding new tools or modifying system prompts, follow these guidelines to he
   ```
 
 **3. Include Concrete Examples**
+
 - Show the model exactly what a tool call looks like
 - Example: `{:code "(vec (range 5))"} => "[0 1 2 3 4]"`
 
 **4. Remind Model to Ask Instead of Guess**
+
 - Add guidance like "DO NOT guess parameters" or "Ask follow-up questions if essential info is missing"
 
 **5. Limit Results**
+
 - Tell the model to return N results before asking for more
 - Prevents endless loops and keeps responses focused
 
 **6. Namespace Native Tools**
+
 - Use explicit names (e.g., `clojure-eval`) to avoid collisions with MCP tools
 - Don't add tools to the filter that aren't implemented
 
@@ -835,13 +908,14 @@ fix: correct port extraction from http-kit server
 Use :local-port from meta instead of assuming port 0
 ```
 
----
+______________________________________________________________________
 
 ## Architectural Patterns
 
 ### Avoiding Circular Dependencies
 
 When components need to check state of other components, avoid:
+
 - `getattr(obj, 'attribute', default)` - loses type safety
 - `hasattr(obj, 'attribute')` - no type checking
 - Moving imports inside functions - hard to maintain
@@ -850,7 +924,7 @@ Instead, use data-driven design with shared atoms or pass explicit parameters. I
 
 ### Code Organization Principles
 
-- **Single file is fine** - If a program fits in one file (<1000 lines), don't split it
+- **Single file is fine** - If a program fits in one file (\<1000 lines), don't split it
 - **Namespace boundaries** - Split when you have distinct, independent concerns
 - **Shared state** - Use atoms at the appropriate scope (not global unless truly necessary)
 - **Configuration** - Keep it in EDN files, load at runtime, not compile time
@@ -932,7 +1006,7 @@ If zen/kimi-k2.5-free hits context limit (503), nvidia/moonshotai/kimi-k2.5 has 
 
 But most chains are same-model-different-provider for redundancy, not tiered.
 
----
+______________________________________________________________________
 
 ## The Most Important Lesson
 
@@ -941,10 +1015,11 @@ But most chains are same-model-different-provider for redundancy, not tiered.
 **AI agents NEVER ask "does this already exist?"** They'll suggest building a custom proxy before checking if LiteLLM exists. They'll recommend a database before checking if SQLite fits. They'll architect a queue before checking if channels work.
 
 **Your job as the agent is to:**
+
 1. ALWAYS research first - check what libraries/solutions already exist
-2. Question assumptions - don't accept "we need to build X" without checking
-3. Read this codebase first - understand what's already here before adding
-4. Search the ecosystem - someone has probably solved your problem
+1. Question assumptions - don't accept "we need to build X" without checking
+1. Read this codebase first - understand what's already here before adding
+1. Search the ecosystem - someone has probably solved your problem
 
 **When to research vs. build:**
 

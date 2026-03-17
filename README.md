@@ -8,7 +8,7 @@ mcp-injector sits between an agent (like OpenClaw) and LLM gateways. It provides
 
 - ✅ **Virtual model chains** - Define fallback providers with cooldowns.
 - ✅ **Governance Framework** - Declarative tool access policies (Permissive/Strict).
-- ✅ **PII Scanning** - Automatic redaction of sensitive data in prompts and tool outputs.
+- ✅ **PII Scanning & Restoration** - Automatic redaction of sensitive data in prompts. Trusted tools can receive original PII values for secure processing.
 - ✅ **Signed Audit Trail** - Tamper-proof NDJSON logs with ULID and HMAC chaining.
 - ✅ **Provider-Level Observability** - Granular tracking of tokens, requests, and rate-limits per provider.
 - ✅ **Multi-transport MCP** - Support for HTTP and STDIO (local process) MCP servers.
@@ -19,13 +19,16 @@ mcp-injector sits between an agent (like OpenClaw) and LLM gateways. It provides
 mcp-injector includes a robust governance layer configured via the `:governance` key in `mcp-servers.edn` (copy from `mcp-servers.example.edn`).
 
 ### Governance Modes
+
 - `:permissive` (Default): All tools are allowed unless explicitly denied.
 - `:strict`: All tools are denied unless explicitly allowed in the policy.
 
 ### Privileged Tools
+
 Certain high-risk tools (like `clojure-eval`) are marked as **Privileged**. These tools are **always blocked** by default, even in permissive mode, unless explicitly listed in an `:allow` rule.
 
 ### Example Policy
+
 ```clojure
 :governance
 {:mode :permissive
@@ -41,13 +44,62 @@ Certain high-risk tools (like `clojure-eval`) are marked as **Privileged**. Thes
  {:enabled true :mode :replace}}
 ```
 
+### PII Restoration (Smart Vault)
+
+For tools that need access to original PII data (e.g., a Stripe integration that must see real email addresses), configure trust levels:
+
+```clojure
+:servers
+{:stripe
+ {:url "http://localhost:3001/mcp"
+  :trust :restore  ; :none (default), :read, or :restore
+  :tools [{:name "retrieve_customer" :trust :restore}]}}
+```
+
+- **`:none`** (default): Tool receives redacted tokens like `[EMAIL_ADDRESS_a35e2662]`
+- **`:restore`**: Tool receives original values (e.g., `wes@example.com`)
+
+The vault uses deterministic SHA-256 hashing with a per-request salt, ensuring tokens are consistent within a request but not leakable across requests.
+
+### ⚠️ Security Notice: `clojure-eval` Escape Hatch
+
+The `clojure-eval` tool is a **privileged escape hatch** that allows the LLM to execute arbitrary Clojure code on the host JVM. This is **Remote Code Execution (RCE) by design**.
+
+- **Default State**: Disabled. You must explicitly allow `clojure-eval` in your policy's `:allow` list.
+- **Risk**: If enabled, a compromised, hallucinating, or prompt-injected LLM gains **full system access**—including files, environment variables, network, and process control.
+- **Mitigation**: Only enable `clojure-eval` for highly trusted models in isolated environments. Treat it as root-level access.
+- **Startup Warning**: When enabled, mcp-injector logs a `CRITICAL` audit event at startup.
+- **Timeout**: `clojure-eval` has a hard 5-second timeout (configurable via `MCP_INJECTOR_EVAL_TIMEOUT_MS` env var) to prevent infinite loops from hanging the agent.
+- **JVM Thread Warning**: The timeout sends a `Thread.interrupt()` to the background thread. CPU-bound infinite loops (e.g., `(while true (+ 1 1))`) will ignore the interrupt and continue running at 100% CPU. The agent loop is protected, but the underlying JVM thread may be exhausted if tight loops are encountered. Restart the process to recover.
+
+### PII Detection Patterns
+
+mcp-injector automatically detects and redacts the following secret types:
+
+| Pattern | Example |
+|---------|---------|
+| Email Addresses | `user@example.com` |
+| IBAN Codes | `DE89370400440532013000` |
+| AWS Access Keys | `AKIAIOSFODNN7EXAMPLE` |
+| AWS Secret Keys | `wJalrXUtnFEMI/K7MDENG/...` |
+| GitHub Tokens | `ghp_abcdefghijklmnopqrstuvwxyz...` |
+| Stripe Keys | `sk_live_abcdefghijklmnopqrstuv...` |
+| Database URLs | `postgresql://user:pass@host:5432/db` |
+| Slack Webhooks | `https://hooks.slack.com/services/...` |
+| Private Keys | `-----BEGIN RSA PRIVATE KEY-----` |
+
+- **Entropy Scanner**: High-entropy strings (>20 chars with 4+ character classes) are also flagged as `[HIGH_ENTROPY_SECRET]`.
+- **Recursion Limit**: PII redaction is protected by a 20-level depth limit to prevent StackOverflowError on malicious nested JSON.
+
 ## Quick Start
 
 ### Prerequisites
+
 - [Babashka](https://babashka.org/) installed
 - [Nix](https://nixos.org/) (optional)
 
 ### Installation
+
 ```bash
 nix develop
 bb test
@@ -57,11 +109,13 @@ bb run
 ## Configuration
 
 Copy the example config and customize:
+
 ```bash
 cp mcp-servers.example.edn mcp-servers.edn
 ```
 
 Edit `mcp-servers.edn`:
+
 ```clojure
 {:servers
   {:stripe
@@ -101,4 +155,4 @@ services.mcp-injector = {
 
 ______________________________________________________________________
 
-**Status**: Production-ready | **Tests**: 54 passing | **Built with**: Babashka + http-kit + Cheshire
+**Status**: Production-ready | **Tests**: 60 passing | **Built with**: Babashka + http-kit + Cheshire
