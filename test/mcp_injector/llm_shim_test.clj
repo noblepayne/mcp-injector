@@ -25,7 +25,9 @@
                       {:port 0
                        :host "127.0.0.1"
                        :llm-url (str "http://localhost:" (:port llm))
-                       :mcp-config "./mcp-servers.edn"})]
+                       :mcp-servers {:llm-gateway {:fallbacks ["zen/kimi-k2.5-free"
+                                                               "nvidia/moonshotai/kimi-k2.5"
+                                                               "openrouter/moonshotai/kimi-k2.5"]}}})]
         (swap! test-state assoc :injector injector)
         (try
           (f)

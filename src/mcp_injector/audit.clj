@@ -12,6 +12,7 @@
 (def ^:private log-lock (Object.))
 (def ^:private last-sig-state (atom ""))
 (def ^:private audit-writer (atom nil))
+(def ^:private audit-init-warning (atom false))
 
 (defn gen-ulid
   "Generates a 26-character ULID (timestamp + randomness).
@@ -89,7 +90,11 @@
         (.flush w)
         (reset! last-sig-state sig)
         final-entry)
-      (throw (Exception. "Audit system not initialized. Call init-audit! first.")))))
+      (do
+        (when (compare-and-set! audit-init-warning false true)
+          (binding [*out* *err*]
+            (println "WARNING: Audit system not initialized. Audit events will be dropped. (This message is shown once)")))
+        nil))))
 
 (defn verify-log
   "Verifies the cryptographic integrity of an NDJSON audit log file."

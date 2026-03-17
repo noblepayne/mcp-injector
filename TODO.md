@@ -75,3 +75,40 @@ MCP's sampling feature inverts the normal tool-call flow — MCP servers can req
 - Virtual model chain handles `costPriority`, `speedPriority`, `intelligencePriority` preferences
 - Security: Only trusted servers should have sampling access (prompt injection risk)
 - Reference: `SecretiveShell/MCP-Bridge` sampling/sampler.py + modelSelector.py
+
+
+
+
+
+### INBOX
+- models endpoint?
+- test our meta endpoints
+- make listing and searching tools proper first class tools themselves
+
+
+
+Expose list/search as injectable tools — Turn /api/v1/mcp/tools into a native list_mcp_tools (with optional filter param) and search_mcp_tools (keyword/semantic via description match). Agent calls them first → narrows → then get_tool_schema → even less noise in initial prompt.
+Auto-schema on first call — Optional policy flag to fetch schema automatically on first invocation (skip explicit get_tool_schema call) — trade a bit of latency for less agent reasoning.
+Better formatting — Current param hints ([id, limit?]) are nice; could evolve to short JSON examples if models respond better.
+
+
+
+TUNE stuff, we see tools that say "high entropy secret" often. but its... ust the tool name etc.
+
+
+
+### Context Awareness Engine (Future)
+
+**Priority**: Medium | **Status**: Not Started
+
+Currently, when a virtual model chain receives a 503 (Context Overflow), it advances to the next provider. However, most providers in a chain share the same context window (e.g., all "gpt-4o-mini" providers have ~128K windows).
+
+**Problem**: Advancing the chain on 503 wastes quota—the next provider has the same limit and will likely fail too.
+
+**Proposed Solution**: Implement a "Context Compactor" model:
+1. Detect 503 (Context Overflow) from any provider
+2. Before retrying, invoke a lightweight "compactor" model (e.g., `gpt-4o-mini`) to summarize the conversation history
+3. Retry the original model with the compressed context
+4. This preserves the preferred model while fitting within its window
+
+**Alternative**: For now, we rely on upstream agents (like OpenClaw) to handle compaction via session reset. This is the simpler "reliability over features" approach.

@@ -15,6 +15,8 @@
                 (require 'mcp-injector.mcp-client-sse-test)
                 (require 'mcp-injector.json-error-test)
                 (require 'mcp-injector.native-tools-test)
+                (require 'mcp-injector.restoration-test)
+                (require 'mcp-injector.governance-integration-test)
                 (let [{:keys [fail error]} (t/run-tests 'mcp-injector.integration-test
                                                         'mcp-injector.discovery-test
                                                         'mcp-injector.mcp-session-test
@@ -23,7 +25,9 @@
                                                         'mcp-injector.mcp-client-headers-test
                                                         'mcp-injector.mcp-client-sse-test
                                                         'mcp-injector.json-error-test
-                                                        'mcp-injector.native-tools-test)]
+                                                        'mcp-injector.native-tools-test
+                                                        'mcp-injector.restoration-test
+                                                        'mcp-injector.governance-integration-test)]
                   (when (pos? (+ fail error))
                     (System/exit 1))))}
 
@@ -40,7 +44,16 @@
       :task (do
               (run 'lint)
               (run 'format-check)
-              (run 'test))}
+              (run 'test)
+              (run 'test-virtual))}
+
+  test-virtual {:doc "Run virtual model tests"
+                :requires ([clojure.test :as t])
+                :task (do
+                        (require 'mcp-injector.virtual-model-test)
+                        (let [{:keys [fail error]} (t/run-tests 'mcp-injector.virtual-model-test)]
+                          (when (pos? (+ fail error))
+                            (System/exit 1))))}
 
   serve {:doc "Start the mcp-injector server"
          :task (exec 'mcp-injector.core/-main)}}}

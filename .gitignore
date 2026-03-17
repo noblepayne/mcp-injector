@@ -6,3 +6,7 @@ logs/
 result
 # Local MCP config (copy mcp-servers.example.edn to this file)
 mcp-servers.edn
+REVIEW_BUNDLE.md
+REVIEW_BUNDLE*.txt
+REVIEW_PROMPT.md
+REVIEW.txt

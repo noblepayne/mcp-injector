@@ -13,9 +13,44 @@
 
 (def ^:private server-state (atom nil))
 (def ^:private usage-stats (atom {}))
+(def ^:private pii-global-salt (atom :unset))
+
+(defn- get-or-create-pii-salt []
+  (let [current @pii-global-salt]
+    (if (not= current :unset)
+      current
+      (swap! pii-global-salt
+             (fn [v]
+               (if (not= v :unset)
+                 v
+                 (let [env (System/getenv "MCP_INJECTOR_PII_SECRET")]
+                   (if (and env (not (str/blank? env)))
+                     env
+                     (str (java.util.UUID/randomUUID))))))))))
+
+(defn derive-pii-salt
+  "Derive a stable salt for PII tokenization using a simple hash.
+   Uses global secret + session identity to prevent cross-session tracking."
+  [session-id]
+  (let [secret (get-or-create-pii-salt)
+        input (str secret "|" session-id)
+        bytes (.getBytes input "UTF-8")
+        digest (java.security.MessageDigest/getInstance "SHA-256")
+        hash (.digest digest bytes)]
+    (apply str (map #(format "%02x" %) hash))))
+
 (def ^:private cooldown-state (atom {}))
 (def ^:private ^:dynamic *request-id* nil)
 (def ^:private ^:dynamic *audit-config* nil)
+
+(def ^:private eval-accident-tripwires
+  "Catches common dangerous patterns emitted by hallucinating LLMs.
+   NOT a security boundary — string-search is trivially bypassed.
+   clojure-eval is RCE-by-design; only enable it for fully trusted
+   models in isolated environments. See README security notice."
+  ["System/exit" "java.lang.Runtime" "clojure.java.shell"
+   "java.io.File/delete" "java.io.File/create" "sh " "sh\t" "sh\""
+   "ProcessBuilder" "getRuntime" "(.exec" "(.. Runtime"])
 
 (defn- log-request
   ([level message data]
@@ -28,7 +63,6 @@
                           context
                           {:data data})]
      (println (json/generate-string log-entry))
-     ;; Fail-open audit logging
      (when *audit-config*
        (try
          (audit/append-event! (:secret *audit-config*) level log-entry)
@@ -37,7 +71,7 @@
              (println (json/generate-string
                        {:timestamp (str (java.time.Instant/now))
                         :level "error"
-                        :message "AUDIT LOG WRITE FAILURE — audit trail degraded"
+                        :message "AUDIT LOG WRITE FAILURE"
                         :error (.getMessage e)})))))))))
 
 (defn- parse-body [body]
@@ -74,17 +108,15 @@
                       (str error-data))]
     (cond
       (is-context-overflow-error? error-str)
-      {:message "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model."
+      {:message "Context overflow: prompt too large for the model."
        :status 503
        :type "context_overflow"
        :details error-data}
-
       (= 429 status-code)
       {:message (or (:message error-data) "Rate limit exceeded")
        :status 429
        :type "rate_limit_exceeded"
        :details error-data}
-
       :else
       {:message (or (:message error-data) "Upstream error")
        :status 502
@@ -93,24 +125,28 @@
 
 (defn- call-llm [base-url payload]
   (let [url (str (str/replace base-url #"/$" "") "/v1/chat/completions")
+        start-nano (System/nanoTime)
         resp (try
                (http-client/post url
                                  {:headers {"Content-Type" "application/json"}
                                   :body (json/generate-string payload)
                                   :throw false})
                (catch Exception e
-                 {:status 502 :body (json/generate-string {:error {:message (.getMessage e)}})}))]
+                 (log-request "error" "LLM call failed" {:error (.getMessage e) :duration-ms (/ (- (System/nanoTime) start-nano) 1000000.0)} {:url url})
+                 {:status 502 :body (json/generate-string {:error {:message "Upstream LLM provider error"}})}))]
     (if (= 200 (:status resp))
       {:success true :data (json/parse-string (:body resp) true)}
       (let [status (:status resp)
             error-data (try (json/parse-string (:body resp) true) (catch Exception _ (:body resp)))
-            translated (translate-error-for-openclaw error-data status)]
-        (log-request "warn" "LLM Error" {:status status :body (:body resp) :translated translated})
+            translated (translate-error-for-openclaw error-data status)
+            duration (/ (- (System/nanoTime) start-nano) 1000000.0)]
+        (log-request "warn" "LLM Error" {:status status :body (:body resp) :translated translated :duration-ms duration} nil)
         {:success false :status (:status translated) :error translated}))))
 
 (defn- record-completion! [alias provider usage]
   (when usage
-    (let [update-entry (fn [existing usage]
+    (let [now (System/currentTimeMillis)
+          update-entry (fn [existing usage]
                          (let [input (or (:prompt_tokens usage) 0)
                                output (or (:completion_tokens usage) 0)
                                total (or (:total_tokens usage) (+ input output))]
@@ -120,7 +156,7 @@
                             :total-tokens (+ total (or (:total-tokens existing) 0))
                             :rate-limits (or (:rate-limits existing) 0)
                             :context-overflows (or (:context-overflows existing) 0)
-                            :last-updated (System/currentTimeMillis)}))]
+                            :last-updated now}))]
       (swap! usage-stats
              (fn [stats]
                (cond-> stats
@@ -129,7 +165,8 @@
 
 (defn- track-provider-failure! [provider status]
   (when provider
-    (let [counter (if (= status 503) :context-overflows :rate-limits)]
+    (let [now (System/currentTimeMillis)
+          counter (if (= status 503) :context-overflows :rate-limits)]
       (swap! usage-stats update provider
              (fn [existing]
                (assoc (or existing {:requests 0
@@ -137,97 +174,169 @@
                                     :total-output-tokens 0
                                     :total-tokens 0})
                       counter (inc (or (get existing counter) 0))
-                      :last-updated (System/currentTimeMillis)))))))
+                      :last-updated now))))))
 
 (defn reset-usage-stats! []
   (reset! usage-stats {}))
 
-(defn- execute-tool [full-name args mcp-servers discovered-this-loop governance context]
+(defn- parse-tool-name [full-name]
+  (if (and (string? full-name) (str/includes? full-name "__"))
+    (let [t-name (str/replace full-name #"^mcp__" "")
+          idx (str/last-index-of t-name "__")]
+      (if (pos? idx)
+        [(subs t-name 0 idx) (subs t-name (+ idx 2))]
+        [nil full-name]))
+    [nil full-name]))
+
+(defn- execute-tool [full-name args mcp-servers discovered-map governance context]
   (let [policy-result (policy/allow-tool? (:policy governance) full-name context)]
     (if-not (:allowed? policy-result)
       (do
         (log-request "warn" "Tool Blocked by Policy" {:tool full-name :reason (:reason policy-result)} context)
-        {:error "Tool execution denied"})
+        [{:error "Tool execution denied"} discovered-map])
       (cond
         (= full-name "get_tool_schema")
         (let [full-tool-name (:tool args)
-              ;; Parse prefixed name: mcp__server__tool -> [server tool]
-              [s-name t-name] (if (and full-tool-name (str/includes? full-tool-name "__"))
-                                (let [idx (str/last-index-of full-tool-name "__")]
-                                  [(subs full-tool-name 5 idx) (subs full-tool-name (+ idx 2))])
-                                [nil nil])
+              [s-name t-name] (parse-tool-name full-tool-name)
               s-config (when s-name (get-in mcp-servers [:servers (keyword s-name)]))]
           (if (and s-name s-config t-name)
             (let [schema (mcp/get-tool-schema (name s-name) s-config t-name (:policy governance))]
               (if (:error schema)
-                schema
-                (do
-                  (swap! discovered-this-loop assoc full-tool-name schema)
-                  schema)))
-            {:error (str "Invalid tool name. Use format: mcp__server__tool (e.g., mcp__stripe__retrieve_customer). Got: " full-tool-name)}))
+                [schema discovered-map]
+                [schema (assoc discovered-map full-tool-name schema)]))
+            [{:error (str "Invalid tool name: " full-tool-name)} discovered-map]))
 
         (= full-name "clojure-eval")
         (try
           (let [code (:code args)
-                ;; NOTE: clojure-eval is a full JVM/Babashka load-string. 
-                ;; Security is currently enforced only via the Policy layer (explicit opt-in).
-                result (load-string code)]
-            (pr-str result))
+                blocked? (some #(str/includes? code %) eval-accident-tripwires)
+                start-nano (System/nanoTime)]
+            (if blocked?
+              (do
+                (log-request "error" "clojure-eval tripwire triggered" {:code (subs code 0 (min 100 (count code)))} context)
+                [{:error "Security Violation: prohibited system calls detected"} discovered-map])
+              (let [eval-timeout (or (:eval-timeout-ms governance) 5000)
+                    eval-future (future (load-string code))
+                    result (deref eval-future eval-timeout ::timeout)
+                    duration (/ (- (System/nanoTime) start-nano) 1000000.0)]
+                (if (= result ::timeout)
+                  (do
+                    (future-cancel eval-future)
+                    (log-request "error" "clojure-eval timeout" {:duration-ms duration} context)
+                    [{:error (format "Eval error: Evaluation timed out after %d seconds" (quot (long eval-timeout) 1000))} discovered-map])
+                  (do
+                    (log-request "debug" "clojure-eval success" {:duration-ms duration} context)
+                    [(json/generate-string result) discovered-map])))))
           (catch Exception e
-            {:error (str "Eval error: " (.getMessage e))}))
+            [{:error (str "Eval error: " (.getMessage e))} discovered-map]))
 
         (str/starts-with? full-name "mcp__")
-        (let [t-name (str/replace full-name #"^mcp__" "")
-              [s-name real-t-name] (if (str/includes? t-name "__")
-                                     (let [idx (str/last-index-of t-name "__")]
-                                       [(subs t-name 0 idx) (subs t-name (+ idx 2))])
-                                     [nil t-name])
-              s-config (when s-name (get-in mcp-servers [:servers (keyword s-name)]))]
+        (let [[s-name real-t-name] (parse-tool-name full-name)
+              s-config (when s-name (get-in mcp-servers [:servers (keyword s-name)]))
+              start-nano (System/nanoTime)]
           (if (and s-name s-config)
             (let [result (mcp/call-tool (name s-name) s-config real-t-name args (:policy governance))
-                  ;; Auto-discover: add schema to discovered-this-loop so next turn has it
-                  _ (when-not (contains? result :error)
-                      (let [schema (mcp/get-tool-schema (name s-name) s-config real-t-name (:policy governance))]
-                        (when-not (:error schema)
-                          (swap! discovered-this-loop assoc full-name schema))))]
-              result)
-            (if-let [_ (get @discovered-this-loop full-name)]
+                  duration (/ (- (System/nanoTime) start-nano) 1000000.0)
+                  _ (log-request "debug" "MCP Tool Call" {:tool full-name :duration-ms duration} context)]
+              (if (:error result)
+                [result discovered-map]
+                (let [schema (mcp/get-tool-schema (name s-name) s-config real-t-name (:policy governance))]
+                  (if (:error schema)
+                    [result discovered-map]
+                    [result (assoc discovered-map full-name schema)]))))
+            (if-let [_ (get discovered-map full-name)]
               (let [[_ s-name-auto real-t-auto] (str/split full-name #"__" 3)
-                    s-conf-auto (get-in mcp-servers [:servers (keyword s-name-auto)])]
-                (mcp/call-tool (name s-name-auto) s-conf-auto real-t-auto args (:policy governance)))
-              {:error (str "Unknown tool: " full-name ". Use get_tool_schema with full prefixed name first.")})))
+                    s-conf-auto (get-in mcp-servers [:servers (keyword s-name-auto)])
+                    result (mcp/call-tool (name s-name-auto) s-conf-auto real-t-auto args (:policy governance))
+                    duration (/ (- (System/nanoTime) start-nano) 1000000.0)
+                    _ (log-request "debug" "MCP Tool Call" {:tool full-name :duration-ms duration} context)]
+                [result discovered-map])
+              [{:error (str "Unknown tool: " full-name)} discovered-map])))
 
-        :else {:error (str "Unknown tool: " full-name)}))))
+        :else [{:error (str "Unknown tool: " full-name)} discovered-map]))))
 
-(defn- scrub-messages [messages]
-  (mapv (fn [m]
-          (if (string? (:content m))
-            (let [{:keys [text detected]} (pii/scan-and-redact (:content m) {:mode :replace})]
-              (when (seq detected)
-                (log-request "info" "PII Redacted" {:labels detected} {:role (:role m)}))
-              (assoc m :content text))
-            m))
-        messages))
+(defn- scrub-messages [messages vault request-id governance]
+  (let [pii-enabled (get-in governance [:pii :enabled] true)]
+    (reduce
+     (fn [[msgs current-vault] m]
+       (let [content (:content m)
+             role (:role m)]
+         (if (and (string? content)
+                  (contains? #{"system" "user" "assistant"} role)
+                  pii-enabled)
+           (let [config {:mode :replace :salt request-id}
+                 [redacted-content new-vault _] (pii/redact-data content config current-vault)]
+             [(conj msgs (assoc m :content redacted-content)) new-vault])
+           [(conj msgs m) current-vault])))
+     [[] vault]
+     messages)))
 
-(defn- sanitize-tool-output [content]
-  (if (string? content)
-    (str/replace content
-                 #"(?im)^\s*(system|human|assistant|user)\s*:"
-                 "[REDACTED_ROLE_MARKER]")
-    content))
+(defn- restore-tool-args [args vault mcp-servers full-tool-name]
+  (let [[server tool] (parse-tool-name full-tool-name)
+        trust (when server (config/get-server-trust mcp-servers server tool))]
+    (case trust
+      :restore (pii/restore-tokens args vault)
+      :block (let [args-str (if (string? args) args (json/generate-string args))
+                   has-tokens (re-find #"\[[A-Z_]+_[a-f0-9]+\]" args-str)]
+               (if has-tokens
+                 :pii-blocked
+                 args))
+      args)))
+
+(defn- redact-tool-output [raw-output vault request-id governance]
+  (let [pii-enabled (get-in governance [:pii :enabled] true)
+        config {:mode :replace :salt request-id}
+        parse-json (fn [s] (try (json/parse-string s true) (catch Exception _ nil)))
+        parsed (parse-json raw-output)
+        [redacted new-vault detected]
+        (if pii-enabled
+          (if parsed
+            (let [parsed (cond
+                           (map? parsed)
+                           (if (string? (:text parsed))
+                             (or (parse-json (:text parsed)) parsed)
+                             parsed)
+                           (sequential? parsed)
+                           (mapv (fn [item]
+                                   (if (and (map? item) (string? (:text item)))
+                                     (assoc item :text (or (parse-json (:text item)) (:text item)))
+                                     item))
+                                 parsed)
+                           :else parsed)
+                  [redacted-struct vault-after labels] (pii/redact-data parsed config vault)]
+              [(json/generate-string redacted-struct) vault-after labels])
+            (let [[redacted-str vault-after labels] (pii/redact-data raw-output config vault)]
+              [redacted-str vault-after labels]))
+          [raw-output vault []])]
+    (when (and (seq detected) pii-enabled)
+      (log-request "info" "PII Redacted in Tool Output" {:labels detected} {}))
+    [redacted new-vault]))
 
 (defn- agent-loop [llm-url payload mcp-servers max-iterations governance]
   (let [model (:model payload)
-        discovered-this-loop (atom {})
-        context {:model model}]
-    (loop [current-payload (update payload :messages scrub-messages)
+        vault {}
+        request-id (or (:request-id payload) (str (java.util.UUID/randomUUID)))
+        ;; Extract session identity for stable PII tokenization
+        ;; Priority: extra_body.session-id > extra_body.user > user > request-id
+        session-id (or (get-in payload [:extra_body :session-id])
+                       (get-in payload [:extra_body :user])
+                       (:user payload)
+                       request-id)
+        pii-salt (derive-pii-salt session-id)
+        context {:model model :request-id request-id :session-id session-id}
+        _ (when (= session-id request-id)
+            (log-request "debug" "No session-id provided. Tokens will be request-scoped (unstable)." {} context))
+        [init-messages init-vault] (scrub-messages (:messages payload) vault pii-salt governance)]
+    (loop [current-payload (assoc payload :messages init-messages :request-id request-id)
+           vault-state init-vault
+           discovered-state {}
            iteration 0]
       (if (>= iteration max-iterations)
         {:success true
          :provider model
          :data {:choices [{:index 0
                            :message {:role "assistant"
-                                     :content "Maximum iterations reached. Here's what I found so far:"
+                                     :content "Maximum iterations reached."
                                      :tool_calls nil}
                            :finish_reason "length"}]}}
         (let [_ (log-request "info" "Tool Loop" {:iteration iteration :calls (count (get-in current-payload [:messages]))} context)
@@ -239,51 +348,69 @@
                   tool-calls (:tool_calls message)]
               (if-not tool-calls
                 (assoc resp :provider model)
-                (let [mcp-calls (filter #(or (= (get-in % [:function :name]) "get_tool_schema")
-                                             (str/starts-with? (get-in % [:function :name]) "mcp__"))
+                (let [mcp-calls (filter (fn [tc]
+                                          (let [n (get-in tc [:function :name])]
+                                            (or (= n "get_tool_schema")
+                                                (and n (str/starts-with? n "mcp__")))))
                                         tool-calls)
                       native-calls (filter #(= (get-in % [:function :name]) "clojure-eval")
                                            tool-calls)]
                   (if (and (empty? mcp-calls) (empty? native-calls))
                     (assoc resp :provider model)
-                    (let [results (mapv (fn [tc]
-                                          (let [fn-name (get-in tc [:function :name])
-                                                args-str (get-in tc [:function :arguments])
-                                                parse-result (try
-                                                               {:success true :args (json/parse-string args-str true)}
-                                                               (catch Exception e
-                                                                 {:success false :error (.getMessage e)}))]
-                                            (if (:success parse-result)
-                                              (let [result (execute-tool fn-name (:args parse-result) mcp-servers discovered-this-loop governance context)
-                                                    ;; Scrub and sanitize tool output
-                                                    raw-content (if (string? result) result (json/generate-string result))
-                                                    sanitized (sanitize-tool-output raw-content)
-                                                    {:keys [text detected]} (pii/scan-and-redact sanitized {:mode :replace})
-                                                    _ (when (seq detected)
-                                                        (log-request "info" "PII Redacted in Tool Output" {:tool fn-name :labels detected} context))]
-                                                {:role "tool"
-                                                 :tool_call_id (:id tc)
-                                                 :name fn-name
-                                                 :content text})
-                                              {:role "tool"
-                                               :tool_call_id (:id tc)
-                                               :name fn-name
-                                               :content (json/generate-string
-                                                         {:error "Malformed tool arguments JSON"
-                                                          :details {:args-str args-str
-                                                                    :parse-error (:error parse-result)}})})))
-                                        (concat mcp-calls native-calls))
-                          newly-discovered @discovered-this-loop
+                    (let [[results new-vault new-discovered]
+                          (reduce
+                           (fn [[results-acc vault-acc disc-acc] tc]
+                             (let [fn-name (get-in tc [:function :name])
+                                   args-str (get-in tc [:function :arguments])
+                                   parse-result (try
+                                                  {:success true :args (json/parse-string args-str true)}
+                                                  (catch Exception e
+                                                    {:success false :error (.getMessage e)}))]
+                               (if (:success parse-result)
+                                 (let [restored-args (restore-tool-args (:args parse-result) vault-acc mcp-servers fn-name)]
+                                   (if (= restored-args :pii-blocked)
+                                     [(conj results-acc {:role "tool"
+                                                         :tool_call_id (:id tc)
+                                                         :name fn-name
+                                                         :content (json/generate-string {:error "PII Blocked: tool has :trust :block and received redacted tokens"})})
+                                      vault-acc
+                                      disc-acc]
+                                     (let [[result updated-disc] (execute-tool fn-name restored-args mcp-servers disc-acc governance context)
+                                           raw-content (if (string? result) result (json/generate-string result))
+                                           [redacted updated-vault] (redact-tool-output raw-content vault-acc pii-salt governance)]
+                                       [(conj results-acc {:role "tool"
+                                                           :tool_call_id (:id tc)
+                                                           :name fn-name
+                                                           :content redacted})
+                                        updated-vault
+                                        updated-disc])))
+                                 [(conj results-acc {:role "tool"
+                                                     :tool_call_id (:id tc)
+                                                     :name fn-name
+                                                     :content (json/generate-string
+                                                               {:error "Malformed tool arguments JSON"
+                                                                :details {:args-str args-str
+                                                                          :parse-error (:error parse-result)}})})
+                                  vault-acc
+                                  disc-acc])))
+                           [[] vault-state discovered-state]
+                           (concat mcp-calls native-calls))
                           new-tools (vec (concat (config/get-meta-tool-definitions)
                                                  (map (fn [[name schema]]
                                                         {:type "function"
                                                          :function {:name name
                                                                     :description (:description schema)
                                                                     :parameters (:inputSchema schema)}})
-                                                      newly-discovered)))
-                          new-messages (conj (vec (:messages current-payload)) message)
-                          new-messages (into new-messages results)]
-                      (recur (assoc current-payload :messages new-messages :tools new-tools) (inc iteration)))))))))))))
+                                                      new-discovered)))
+                          new-messages (conj (vec (:messages current-payload)) (assoc message :content (or (:content message) "")))
+                          new-messages (into new-messages results)
+                          [scrubbed-messages post-vault] (scrub-messages new-messages new-vault pii-salt governance)]
+                      (recur (-> current-payload
+                                 (assoc :messages scrubbed-messages)
+                                 (assoc :tools new-tools))
+                             post-vault
+                             new-discovered
+                             (inc iteration)))))))))))))
 
 (defn- set-cooldown! [provider minutes]
   (swap! cooldown-state assoc provider (+ (System/currentTimeMillis) (* minutes 60 1000))))
@@ -301,10 +428,7 @@
 (defn- body->string [body]
   (if (string? body) body (slurp body)))
 
-(defn- extract-discovered-tools
-  "Scan messages for tool schemas returned by get_tool_schema.
-   Returns a map of tool-name -> full tool schema."
-  [messages]
+(defn- extract-discovered-tools [messages]
   (reduce
    (fn [acc msg]
      (if (= "tool" (:role msg))
@@ -334,11 +458,13 @@
                                   discovered-tools)
         merged-tools (vec (concat (or existing-tools [])
                                   meta-tools
-                                  discovered-tool-defs))]
+                                  discovered-tool-defs))
+        extra-body (or (:extra_body chat-req) {})
+        safe-extra (select-keys extra-body [:request-id :user :session-id :client-id])]
     (-> chat-req
-        (assoc :stream false)
+        (merge safe-extra)
+        (assoc :stream false :fallbacks fallbacks)
         (dissoc :stream_options)
-        (assoc :fallbacks fallbacks)
         (update :messages (fn [msgs]
                             (mapv (fn [m]
                                     (if (and (= (:role m) "assistant") (:tool_calls m))
@@ -428,11 +554,17 @@
                      (json/generate-string {:error {:message error-msg :type error-type :details (get-in result [:error :details])}}))]
           {:status status :headers {"Content-Type" (if (:stream chat-req) "text/event-stream" "application/json")} :body body})))
     (catch Exception e
-      (let [err-type (or (some-> e ex-data :type name) "internal_error")]
-        (log-request "error" "Chat completion failed" {:type err-type :message (.getMessage e)} {})
-        {:status 400
+      (let [err-data (ex-data e)
+            status (or (:status err-data) 500)
+            err-type (or (some-> err-data :type name) "internal_error")
+            ;; Only surface messages from our own ex-info throws
+            ;; Never surface raw Java exception messages at the boundary
+            safe-msg (or (:message err-data)
+                         "Internal server error")]
+        (log-request "error" "Chat completion failed" {:type err-type :message (.getMessage e)} {}) ; full detail in logs
+        {:status status
          :headers {"Content-Type" "application/json"}
-         :body (json/generate-string {:error {:message (or (.getMessage e) "Internal server error")
+         :body (json/generate-string {:error {:message safe-msg
                                               :type err-type}})}))))
 
 (defn get-gateway-state []
@@ -447,36 +579,32 @@
     (case [method uri]
       [:get "/api/v1/status"]
       {:status 200 :body (json/generate-string {:status "ok" :version "1.0.0" :warming-up? (:warming-up? (get-gateway-state))})}
-
       [:get "/api/v1/mcp/tools"]
       {:status 200 :body (json/generate-string (mcp/get-cache-state))}
-
       [:post "/api/v1/mcp/reset"]
       (do (mcp/clear-tool-cache!)
           {:status 200 :body (json/generate-string {:message "MCP state reset successful"})})
-
       [:get "/api/v1/llm/state"]
       {:status 200 :body (json/generate-string (get-gateway-state))}
-
       [:post "/api/v1/llm/cooldowns/reset"]
       (do (reset-cooldowns!)
           {:status 200 :body (json/generate-string {:message "Cooldowns reset successful"})})
-
       [:get "/api/v1/stats"]
       {:status 200 :body (json/generate-string {:stats @usage-stats})}
-
       [:get "/api/v1/audit/verify"]
       (let [path (:audit-log-path config)
             secret (:audit-secret config)
             valid? (audit/verify-log (io/file path) secret)]
         {:status 200 :body (json/generate-string {:valid? valid? :path path})})
-
       {:status 404 :body (json/generate-string {:error "Not found"})})))
 
 (defn- handler [request mcp-servers config]
   (let [request-id (str (java.util.UUID/randomUUID))
-        audit-conf {:path (io/file (:audit-log-path config))
-                    :secret (:audit-secret config)}]
+        governance (:governance config)
+        audit-enabled (get-in governance [:audit :enabled] true)
+        audit-conf (when audit-enabled
+                     {:path (io/file (:audit-log-path config))
+                      :secret (:audit-secret config)})]
     (binding [*request-id* request-id
               *audit-config* audit-conf]
       (try
@@ -486,77 +614,95 @@
             (if (= :post (:request-method request))
               (handle-chat-completion request mcp-servers config)
               {:status 405 :body "Method not allowed"})
-
             (= uri "/health")
             {:status 200 :headers {"Content-Type" "application/json"} :body (json/generate-string {:status "ok"})}
-
             (= uri "/stats")
             {:status 200 :headers {"Content-Type" "application/json"} :body (json/generate-string {:stats @usage-stats})}
-
             (str/starts-with? uri "/api/v1")
             (handle-api request mcp-servers config)
-
             :else
             {:status 404 :body "Not found"}))
         (catch Exception e
           (let [err-data (ex-data e)
                 status (or (:status err-data) 500)
-                err-type (or (some-> err-data :type name) "internal_error")]
-            (log-request "error" "Request failed" {:type err-type :message (.getMessage e)} {:endpoint (:uri request)})
+                err-type (or (some-> err-data :type name) "internal_error")
+                ;; Only surface messages from our own ex-info throws
+                ;; Never surface raw Java exception messages at the boundary
+                safe-msg (or (:message err-data) "Internal server error")]
+            (log-request "error" "Request failed" {:type err-type :message (.getMessage e)} {:endpoint (:uri request)}) ; full detail in logs
             {:status status
              :headers {"Content-Type" "application/json"}
-             :body (json/generate-string {:error {:message (or (:message err-data) (.getMessage e) "Internal server error")
+             :body (json/generate-string {:error {:message safe-msg
                                                   :type err-type}})}))))))
 
 (defn start-server [mcp-config]
-  (let [initial-config (if (and (map? mcp-config) (not (:servers mcp-config)))
-                         mcp-config
-                         {})
-        port (or (:port initial-config)
+  (let [port (or (:port mcp-config)
                  (some-> (System/getenv "MCP_INJECTOR_PORT") not-empty Integer/parseInt)
                  8080)
-        host (or (:host initial-config)
+        host (or (:host mcp-config)
                  (System/getenv "MCP_INJECTOR_HOST")
                  "127.0.0.1")
-        llm-url (or (:llm-url initial-config)
+        llm-url (or (:llm-url mcp-config)
                     (System/getenv "MCP_INJECTOR_LLM_URL")
                     "http://localhost:11434")
-        log-level (or (:log-level initial-config)
+        log-level (or (:log-level mcp-config)
                       (System/getenv "MCP_INJECTOR_LOG_LEVEL"))
-        max-iterations (or (:max-iterations initial-config)
+        max-iterations (or (:max-iterations mcp-config)
                            (some-> (System/getenv "MCP_INJECTOR_MAX_ITERATIONS") not-empty Integer/parseInt)
                            10)
-        mcp-config-path (or (:mcp-config-path initial-config)
+        mcp-config-path (or (:mcp-config-path mcp-config)
                             (System/getenv "MCP_INJECTOR_MCP_CONFIG")
                             "mcp-servers.edn")
-        ;; Audit trail config
-        audit-log-path (or (:audit-log-path initial-config)
+        audit-log-path (or (:audit-log-path mcp-config)
                            (System/getenv "MCP_INJECTOR_AUDIT_LOG_PATH")
                            "logs/audit.log.ndjson")
-        audit-secret (or (:audit-secret initial-config)
+        audit-secret (or (:audit-secret mcp-config)
                          (System/getenv "MCP_INJECTOR_AUDIT_SECRET")
                          "default-audit-secret")
-        ;; Merge provided mcp-config with loaded ones if needed
+        eval-timeout-ms (or (:eval-timeout-ms mcp-config)
+                            (some-> (System/getenv "MCP_INJECTOR_EVAL_TIMEOUT_MS") not-empty Integer/parseInt)
+                            5000)
+        _ (when (= audit-secret "default-audit-secret")
+            (log-request "critical"
+                         "AUDIT SECURITY WARNING: Using default HMAC secret. Audit logs are forgeable."
+                         {:secret "default"}
+                         {:mode :startup}))
         base-mcp-servers (cond
                            (and (map? mcp-config) (:servers mcp-config)) mcp-config
-                           (:mcp-servers initial-config) (:mcp-servers initial-config)
+                           (:mcp-servers mcp-config) (:mcp-servers mcp-config)
                            :else (config/load-mcp-servers mcp-config-path))
-        ;; Apply overrides from initial-config (like :virtual-models in tests)
-        mcp-servers (if (seq initial-config)
-                      (let [gateway-overrides (select-keys initial-config [:virtual-models :fallbacks :url])]
-                        (update base-mcp-servers :llm-gateway merge gateway-overrides))
+        provided-governance (config/extract-governance mcp-config)
+        _ (when provided-governance
+            (log-request "info" "Governance source resolved" {:source (:source provided-governance)}))
+        mcp-servers (if (map? mcp-config)
+                      (let [gateway-overrides (select-keys mcp-config [:virtual-models :fallbacks :url :governance])
+                            merged (update base-mcp-servers :llm-gateway merge gateway-overrides)]
+                        (if-let [gov (:governance mcp-config)]
+                          (assoc merged :governance gov)
+                          merged))
                       base-mcp-servers)
-        ;; Unified configuration resolution
         unified-env {:audit-log-path audit-log-path :audit-secret audit-secret}
-        final-governance (config/resolve-governance (assoc mcp-servers :governance (:governance initial-config)) unified-env)
+        final-governance (config/resolve-governance (assoc mcp-servers :governance (:config provided-governance)) unified-env)
         final-config {:port port :host host :llm-url llm-url :log-level log-level
                       :max-iterations max-iterations :mcp-config-path mcp-config-path
                       :audit-log-path audit-log-path :audit-secret audit-secret
-                      :governance final-governance}
-        ;; Validate policy at startup
+                      :governance (assoc final-governance :eval-timeout-ms eval-timeout-ms)}
         _ (policy/validate-policy! (:policy final-governance))
-        ;; P3 Integration: Initialize Audit system
-        _ (audit/init-audit! audit-log-path)
+        _ (let [policy-rules (:policy final-governance)
+                allow-list (:allow policy-rules)]
+            (when (and allow-list
+                       (some #(or (= % "clojure-eval")
+                                  (and (string? %) (str/includes? % "clojure-eval")))
+                             allow-list))
+              (binding [*audit-config* {:path (io/file audit-log-path) :secret audit-secret}
+                        *request-id* "startup-security"]
+                (log-request "critical"
+                             "clojure-eval is ENABLED - escape hatch with full JVM access"
+                             {:feature "clojure-eval" :risk "RCE-by-design"}
+                             {:mode :startup}))
+              (println "WARNING: clojure-eval is ENABLED - full JVM code execution allowed.")))
+        _ (when (get-in final-governance [:audit :enabled] true)
+            (audit/init-audit! audit-log-path))
         srv (http/run-server (fn [req] (handler req mcp-servers final-config)) {:port port :host host})
         actual-port (or (:local-port (meta srv)) port)
         warmup-fut (future (mcp/warm-up! mcp-servers))]
@@ -572,7 +718,6 @@
       (when (fn? srv) (srv :timeout 100))
       (reset! server-state nil)
       (mcp/clear-tool-cache!)
-      ;; P3 Integration: Close Audit system
       (audit/close-audit!))))
 
 (defn clear-mcp-sessions! []

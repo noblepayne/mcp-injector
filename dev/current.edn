@@ -1,15 +1,18 @@
-{:session-id "2026-02-12-005"
- :started "2026-02-12T23:00:00Z"
+{:session-id "2026-03-17-007"
+ :started "2026-03-17T12:00:00Z"
  :active-tasks []
- :completed-this-session [:bifrost-error-handling]
- :notes "Added comprehensive Bifrost error handling:
-- 429 rate limit errors → returned as 429 with proper error type
-- 500 server errors → returned as 502 bad gateway
-- Timeouts → caught and returned as 504 gateway timeout
-- All errors properly formatted for both SSE and JSON modes
-- 3 new tests added (test-bifrost-rate-limit, test-bifrost-server-error, test-bifrost-timeout)
-- All 15 tests passing (7 integration + 8 bifrost shim)
-- Zero lint warnings"
- :next-steps ["Test with real Bifrost instance"
-              "Verify timeout handling in production"
-              "Monitor for edge cases"]}
+ :completed-this-session [:pii-governance-fix :pii-restoration :runtime-hardening :observability]
+ :notes "Completed full hardening PR:
+- Fixed governance.pii.enabled and audit.enabled config toggles
+- Implemented PII Smart Vault with token->value mapping
+- Added clojure-eval timeout (5s) and recursion depth limit (20 levels)
+- Expanded PII patterns: AWS keys, GitHub tokens, Stripe, DB URLs
+- Added monotonic timing (nanoTime) for sub-ms observability
+- Added once-only audit init warning
+- Refactored config purity (resolved at startup, threaded via ctx map)
+- Added peer review process to AGENTS.md
+- All 71 tests passing, lint/format clean
+- Organized specs into dev/specs/completed/"
+ :next-steps ["Merge PR to main"
+              "Monitor production logs for PII detection"
+              "Test clojure-eval timeout in production"]}

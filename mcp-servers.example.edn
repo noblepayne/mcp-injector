@@ -11,12 +11,15 @@
 
   :servers
   {:auphonic {:url "http://localhost:3003/mcp"
-              :tools nil}
-   :nixos {:cmd ["nix" "run" "github:utensils/mcp-nixos"]}
-    ;; Example local tool (uncomment to use)
-    ;; :filesystem
-    ;; {:cmd ["npx" "-y" "@modelcontextprotocol/server-filesystem" "/path/to/allowed/dir"]
-    ;;  :env {"EXAMPLE_VAR" "value"}}
+              :tools nil
+              :trust "none"}   ; "none" (default) or "restore"
+   :nixos {:cmd ["nix" "run" "github:utensils/mcp-nixos"]
+           :trust "none"}
+     ;; Example local tool (uncomment to use)
+     ;; :filesystem
+     ;; {:cmd ["npx" "-y" "@modelcontextprotocol/server-filesystem" "/path/to/allowed/dir"]
+     ;;  :trust "restore"  ; allow token restoration for edit/write
+     ;;  :tools [{:name "write" :trust "restore"}]}
    }
 ;; LLM gateway configuration
   :llm-gateway
@@ -52,8 +55,7 @@
              "openrouter/z-ai/glm5"
              "openrouter/qwen/qwen3-coder-480b-a35b-instruct"]
      :cooldown-minutes 5
-     ;; Don't include 503 (context overflow) in retry-on
-     ;; Same model has same context window, so advancing the chain wastes quota
-     ;; Let OpenClaw compress the session instead
-     :retry-on [429 500]}}}}
+      ;; Default retry-on includes: 400-404, 429, 500, 503
+      ;; Override to customize: :retry-on [429 500] 
+     :retry-on [400 401 402 403 404 429 500 503]}}}}
 
