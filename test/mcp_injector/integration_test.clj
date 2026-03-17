@@ -523,6 +523,99 @@
         (is (= 15 (:total-output-tokens model-stats)))
         (is (= 45 (:total-tokens model-stats)))))))
 
+(deftest extra-body-whitelist
+  (testing "extra_body only allows safe metadata keys through to LLM"
+    (test-llm/clear-responses *test-llm*)
+    (test-llm/set-next-response *test-llm*
+                                {:role "assistant"
+                                 :content "Got it"})
+
+    (let [response @(http/post
+                     (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                     {:body (json/generate-string
+                             {:model "test-model"
+                              :messages [{:role "user" :content "test"}]
+                              :stream false
+                              :extra_body {:request-id "safe-123"
+                                           :user "test-user"
+                                           :session-id "sess-456"
+                                           :client-id "client-789"
+                                            ;; Unsafe keys that should be stripped
+                                           :stream true
+                                           :tools [{:name "evil"}]
+                                           :model "evil-model"
+                                           :temperature 99}})
+                      :headers {"Content-Type" "application/json"}})]
+      (is (= 200 (:status response)))
+
+      ;; Verify the outbound LLM request only has safe keys
+      (let [requests @(:received-requests *test-llm*)
+            first-req (first requests)]
+        (is (= "safe-123" (:request-id first-req)))
+        (is (= "test-user" (:user first-req)))
+        (is (= "sess-456" (:session-id first-req)))
+        (is (= "client-789" (:client-id first-req)))
+        ;; Unsafe keys should NOT be present
+        (is (not (contains? first-req :temperature)))
+        ;; stream should be forced false by injector, not from extra_body
+        (is (false? (:stream first-req)))))))
+
+(deftest vault-state-isolation
+  (testing "Two sequential requests with different PII have isolated vaults"
+    (test-llm/clear-responses *test-llm*)
+
+    ;; Request 1: Contains alice@example.com
+    (test-llm/set-next-response *test-llm*
+                                {:role "assistant"
+                                 :content "Found alice"})
+
+    (let [response-a @(http/post
+                       (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                       {:body (json/generate-string
+                               {:model "test-model"
+                                :messages [{:role "user" :content "alice@example.com"}]
+                                :stream false})
+                        :headers {"Content-Type" "application/json"}})
+          req-a (first @(:received-requests *test-llm*))
+          ;; Extract token from message - system now uses derived salt
+          token-match (re-find #"\[EMAIL_ADDRESS_[a-f0-9]{24}\]" (str (:messages req-a)))
+          token-a token-match]
+
+      (is (= 200 (:status response-a)))
+      (is (some? token-a) "Token should be present")
+      ;; The LLM request should contain the token, not the raw email
+      (is (str/includes? (str (:messages req-a)) token-a))
+      (is (not (str/includes? (str (:messages req-a)) "alice@example.com")))
+
+      ;; Clear for Request 2
+      (test-llm/clear-responses *test-llm*)
+      (reset! (:received-requests *test-llm*) [])
+
+      ;; Request 2: Contains bob@test.com
+      (test-llm/set-next-response *test-llm*
+                                  {:role "assistant"
+                                   :content "Found bob"})
+
+      (let [response-b @(http/post
+                         (str "http://localhost:" (:port *injector*) "/v1/chat/completions")
+                         {:body (json/generate-string
+                                 {:model "test-model"
+                                  :messages [{:role "user" :content "bob@test.com"}]
+                                  :stream false})
+                          :headers {"Content-Type" "application/json"}})
+            req-b (first @(:received-requests *test-llm*))
+            ;; Extract token from message - system now uses derived salt
+            token-match (re-find #"\[EMAIL_ADDRESS_[a-f0-9]{24}\]" (str (:messages req-b)))
+            token-b token-match]
+
+        (is (= 200 (:status response-b)))
+        (is (some? token-b) "Token B should be present")
+        ;; Request B should have bob's token
+        (is (str/includes? (str (:messages req-b)) token-b))
+        (is (not (str/includes? (str (:messages req-b)) "bob@test.com")))
+        ;; Request B should NOT have alice's token from Request A
+        (is (not (str/includes? (str (:messages req-b)) token-a)))))))
+
 (defn -main
   "Entry point for running tests via bb"
   [& _args]

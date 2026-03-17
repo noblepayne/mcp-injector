@@ -1,0 +1,13 @@
+{:title "Smart Vault Hardening & Functional Refactor"
+ :description "Technical hardening of the PII restoration system to ensure cryptographic determinism, state isolation, and information boundary protection."
+ :acceptance-criteria
+ ["Vault state is managed as an immutable map threaded through the agent loop reduce/recur."
+  "PII token generation uses explicit UTF-8 charset for cross-platform determinism."
+  "LLM HTTP responses mask internal stack traces while Audit Logs retain full debug context."
+  "extra_body merging is restricted to a whitelist of safe metadata keys."
+  "Restoration integration tests use dynamic token calculation instead of hardcoded hashes."]
+ :security-properties
+ {:token-entropy "12 hex chars (48 bits)"
+  :token-salt "Per-request request-id"
+  :error-masking "Internal exceptions mapped to generic messages at boundary"
+  :input-sanitization "extra_body whitelist (request-id, user, session-id)"}}
