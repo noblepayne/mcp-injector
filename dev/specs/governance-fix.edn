@@ -1,0 +1,51 @@
+{:title "Fix PII and Audit Governance Configuration"
+ :description "Fix the configuration system so that governance.pii.enabled = false and governance.audit.enabled = false actually disable PII redaction and audit logging. Currently these settings are defined in the config but never checked in the code, making them \"dead config\"."
+ :analysis
+ {:current_state
+  {:pii_implementation
+   {:scrub_messages "Has governance param, checks pii-enabled"
+    :redact_tool_output "Has governance param, checks pii-enabled"
+    :agent_loop "Passes governance to both functions"
+    :config_flow "Works from Nix -> config.clj -> core.clj"}
+   :audit_implementation
+   {:handler "Has audit-enabled check"
+    :audit_config "Bound correctly"
+    :config_flow "Works but test not verifying"}
+   :test_status
+   {:restoration_tests "FAIL - args is nil, not restored email"
+    :total_tests "62 tests, 205 assertions, 2 failures"
+    :governance_tests "Exist but need verification"}}
+  :root_cause_hypothesis
+  "The restoration test failures may be unrelated to governance config - they test PII token restoration which should work regardless of governance settings. The actual governance bug might be in config resolution or in how false values are handled."
+  :config_resolution_issue
+  "The deep-merge function in config.clj treats nil values specially (keeps old value). Need to check if false is treated as nil or if user-provided false properly overwrites default true."}
+ :acceptance-criteria
+ ["governance.pii.enabled = false results in NO redaction of user messages"
+  "governance.pii.enabled = false results in NO redaction of tool outputs"
+  "Default behavior (pii.enabled = true) still works as before"
+  "PII redaction still works when tool has trust = \"restore\" (restores original)"
+  "governance.audit.enabled = false prevents audit log writes"
+  "Audit logs are written when audit.enabled = true"]
+ :edge-cases
+ ["What happens when vault has existing data but pii.enabled is flipped?"
+  "Should audit log path still be resolved even when audit.enabled = false?"
+  "Does audit.secret need to be validated when audit.enabled = false?"
+  "Virtual model chains - does governance config propagate to them?"]
+ :depends-on [:existing-governance-tests :config-system]
+ :implementation-strategy
+ {:phase_1 "Fix restoration tests - understand why args is nil"
+  :phase_2 "Verify governance config resolution - ensure false overwrites true"
+  :phase_3 "Add missing trust level (:read) implementation if needed"
+  :phase_4 "Write comprehensive integration tests for all edge cases"}
+ :test-driven-approach
+ {:new_tests
+  ["Test that pii.enabled = false prevents all redaction (messages and tool output)"
+   "Test that audit.enabled = false prevents audit log writes but still allows logging to stdout"
+   "Test config precedence: Nix > EDN > defaults"
+   "Test that restoration works even when pii.enabled = false (trust:restore should still restore)"]
+  :verification
+  "All tests must use real HTTP servers (test-mcp-server, test-llm-server), not mocks"
+  :rollback
+  "Commit snapshot after each successful test run"}
+ :notes
+ "The user tried governance.pii.enabled = false in Nix config and redaction still occurred. Need to trace exact flow from flake.nix -> mcp-servers.edn -> config.clj -> core.clj."}

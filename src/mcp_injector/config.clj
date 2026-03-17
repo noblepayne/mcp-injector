@@ -13,6 +13,7 @@
    :max-iterations 10
    :log-level "debug"
    :timeout-ms 1800000
+   :eval-timeout-ms 5000
    :audit-log-path "logs/audit.log.ndjson"
    :audit-secret "default-audit-secret"})
 
@@ -166,6 +167,34 @@
     []
     (:servers mcp-config))))
 
+(defn get-server-trust
+  "Get trust level for a server/tool combination.
+   Returns :restore (full restoration), :none (untrusted), or :block.
+   Precedence: tool-level :trust > server-level :trust > :none.
+   Accepts trust values as either keywords (:restore) or strings (\"restore\")."
+  [mcp-config server-name tool-name]
+  (let [servers (or (:servers mcp-config) mcp-config)
+        server (get servers (keyword server-name))]
+    (if-not server
+      :none
+      (let [server-trust (some-> server :trust keyword)
+            tool-configs (:tools server)
+            tool-config (cond
+                          (map? tool-configs)
+                          (get tool-configs (keyword tool-name))
+
+                          (sequential? tool-configs)
+                          (some #(when (= (:name %) (str tool-name)) %) tool-configs)
+
+                          :else nil)
+            tool-trust (some-> tool-config :trust keyword)]
+        (cond
+          (= tool-trust :block) :block
+          (= server-trust :block) :block
+          (= tool-trust :restore) :restore
+          (= server-trust :restore) :restore
+          :else :none)))))
+
 (defn get-meta-tool-definitions
   "Get definitions for meta-tools like get_tool_schema and native tools"
   []
@@ -265,6 +294,24 @@
                   :policy {:mode :permissive}}]
     (deep-merge defaults gov-user)))
 
+(defn extract-governance
+  "Extract governance config from various possible locations in the config map.
+   This handles the 'spread' config pattern where Nix/EDN may place governance
+   at different levels depending on how the config is structured.
+   
+   Precedence: 
+   1. Top-level :governance
+   2. :mcp-servers :governance  
+   3. :base-mcp-servers :governance
+   4. :llm-gateway :governance
+   
+   Returns the governance map or nil if not found."
+  [mcp-config]
+  (or (:governance mcp-config)
+      (:governance (:mcp-servers mcp-config))
+      (:governance (:base-mcp-servers mcp-config))
+      (:governance (:llm-gateway mcp-config))))
+
 (defn get-config
   "Unified config: env vars override config file, with defaults as fallback.
     Priority: env var > config file > default"
@@ -287,6 +334,9 @@
      :timeout-ms (let [v (or (env-var "MCP_INJECTOR_TIMEOUT_MS")
                              (:timeout-ms gateway))]
                    (if (string? v) (parse-int v 1800000) (or v (:timeout-ms env))))
+     :eval-timeout-ms (let [v (or (env-var "MCP_INJECTOR_EVAL_TIMEOUT_MS")
+                                  (:eval-timeout-ms gateway))]
+                        (if (string? v) (parse-int v 5000) (or v (:eval-timeout-ms env) 5000)))
      :fallbacks (:fallbacks gateway)
      :virtual-models (:virtual-models gateway)
      :audit-log-path (get-in gov [:audit :path])
