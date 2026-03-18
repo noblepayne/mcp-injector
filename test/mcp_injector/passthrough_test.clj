@@ -4,12 +4,13 @@
             [cheshire.core :as json]
             [babashka.http-client :as http]
             [mcp-injector.core :as core]
+            [mcp-injector.pii :as pii]
             [mcp-injector.test-mcp-server :as mcp-server]
             [mcp-injector.test-llm-server :as llm-server]))
 
 (defn- start-system []
   (let [mcp (mcp-server/start-test-mcp-server)
-        llm (llm-server/start-test-llm-server)
+        llm (llm-server/start-server)
         mcp-config {:servers {:test {:url (str "http://localhost:" (:port mcp) "/mcp")
                                      :tools ["get_secret"]}}
                     :governance {:passthrough-trust {"read_file" :restore
@@ -24,19 +25,26 @@
   (llm-server/stop-server (:llm sys))
   (core/stop-server (:injector sys)))
 
+(defn- get-token [id value session-id]
+  (let [salt (core/derive-pii-salt session-id)]
+    (pii/generate-token id value salt)))
+
+(defn- extract-token [req]
+  (let [content (get-in (last (:messages req)) [:content])]
+    (re-find #"\[EMAIL_ADDRESS_[a-f0-9]+\]" content)))
+
 (deftest passthrough-restoration-test
   (let [sys (start-system)
         injector-url (str "http://localhost:" (:port (:injector sys)) "/v1/chat/completions")]
     (try
       (testing "Simple passthrough restoration"
-        ;; 1. Seed the vault with a user message containing PII
-        ;; 2. LLM responds with a passthrough tool call using that PII
-        (llm-server/set-next-response (:llm sys)
-                                      {:choices [{:message {:role "assistant"
-                                                            :tool_calls [{:id "call_1"
-                                                                          :type "function"
-                                                                          :function {:name "read_file"
-                                                                                     :arguments "{\"path\": \"[EMAIL_ADDRESS_a35e2662]\"}"}}]}}]})
+        (llm-server/set-dynamic-response!
+         (:llm sys)
+         (fn [req]
+           (let [token (extract-token req)]
+             {:role "assistant"
+              :tool_calls [{:name "read_file"
+                            :arguments {:path token}}]})))
 
         (let [resp (http/post injector-url
                               {:body (json/generate-string
@@ -44,31 +52,31 @@
                                        :messages [{:role "user" :content "My email is wes@example.com. Read the file."}]})})]
           (is (= 200 (:status resp)))
           (let [body (json/parse-string (:body resp) true)
-                tool-call (get-in body [:choices 0 :message :tool_calls 0])]
+                message (get-in body [:choices 0 :message])
+                tool-call (first (:tool_calls message))]
             (is (= "read_file" (get-in tool-call [:function :name])))
-            ;; Should be restored to the original email because of :restore trust
             (is (str/includes? (get-in tool-call [:function :arguments]) "wes@example.com")))))
 
       (testing "Mixed batch priority (Strict Priority logic)"
-        ;; 1. LLM returns mixed batch
-        (llm-server/set-next-response (:llm sys)
-                                      {:choices [{:message {:role "assistant"
-                                                            :tool_calls [{:id "call_internal"
-                                                                          :type "function"
-                                                                          :function {:name "mcp__test__get_secret"
-                                                                                     :arguments "{}"}}
-                                                                         {:id "call_passthrough"
-                                                                          :type "function"
-                                                                          :function {:name "read_file"
-                                                                                     :arguments "{\"content\": \"[EMAIL_ADDRESS_a35e2662]\"}"}}]}}]})
+        ;; 1. First call returns mixed batch
+        (llm-server/set-dynamic-response!
+         (:llm sys)
+         (fn [req]
+           (let [token (extract-token req)]
+             {:role "assistant"
+              :tool_calls [{:name "mcp__test__get_secret"
+                            :arguments {}}
+                           {:name "read_file"
+                            :arguments {:content token}}]})))
 
-        ;; 2. LLM returns only passthrough after receiving secret (recursive step)
-        (llm-server/set-next-response (:llm sys)
-                                      {:choices [{:message {:role "assistant"
-                                                            :tool_calls [{:id "call_passthrough_2"
-                                                                          :type "function"
-                                                                          :function {:name "read_file"
-                                                                                     :arguments "{\"content\": \"[EMAIL_ADDRESS_a35e2662]\"}"}}]}}]})
+        ;; 2. Recursive call returns only passthrough
+        (llm-server/set-dynamic-response!
+         (:llm sys)
+         (fn [req]
+           (let [token (extract-token req)]
+             {:role "assistant"
+              :tool_calls [{:name "read_file"
+                            :arguments {:content token}}]})))
 
         ;; Internal tool execution result
         (mcp-server/set-mcp-response (:mcp sys) "get_secret" {:secret "top-secret-123"})
@@ -80,27 +88,23 @@
           (is (= 200 (:status resp)))
           (let [body (json/parse-string (:body resp) true)
                 tool-calls (get-in body [:choices 0 :message :tool_calls])]
-            ;; Final response should only contain the handoff tool calls from the last LLM interaction
             (is (= 1 (count tool-calls)))
             (is (= "read_file" (get-in (first tool-calls) [:function :name])))
-            ;; Passthrough tool should have restored PII
             (is (str/includes? (get-in (first tool-calls) [:function :arguments]) "wes@example.com")))))
 
       (testing "Malformed JSON arguments handling"
         (llm-server/set-next-response (:llm sys)
-                                      {:choices [{:message {:role "assistant"
-                                                            :tool_calls [{:id "call_bad_json"
-                                                                          :type "function"
-                                                                          :function {:name "read_file"
-                                                                                     :arguments "{\"path\": \"unterminated string...}"}}]}}]})
+                                      {:role "assistant"
+                                       :tool_calls [{:name "read_file"
+                                                     :arguments "{\"path\": \"unterminated string...}"}]})
         (let [resp (http/post injector-url
                               {:body (json/generate-string
                                       {:model "test-model"
                                        :messages [{:role "user" :content "Break things."}]})})]
           (is (= 200 (:status resp)))
           (let [body (json/parse-string (:body resp) true)
-                tool-call (get-in body [:choices 0 :message :tool_calls 0])]
-            ;; Should return the tool call with an error message in arguments
+                message (get-in body [:choices 0 :message])
+                tool-call (first (:tool_calls message))]
             (is (str/includes? (get-in tool-call [:function :arguments]) "Malformed JSON arguments")))))
 
       (finally

@@ -60,6 +60,22 @@ For internal MCP tools that need access to original PII data (e.g., a Stripe int
   :tools [{:name "retrieve_customer" :trust :restore}]}}
 ```
 
+### High-Entropy Secret Detection
+
+The PII filter includes a **statistical detection engine** that identifies secrets by their Shannon entropy and character diversity:
+
+- **Entropy Threshold (3.8)**: Filters tokens with Shannon entropy > 3.8 bits per character. This catches high-randomness strings like API keys and tokens while allowing natural language through.
+- **Character Diversity**: Requires at least 4 distinct character classes (lowercase, uppercase, digits, special) OR 3 classes with minimum 30 characters. This prevents false positives on architectural identifiers like file paths or UUIDs.
+- **Minimum Length (13)**: Tokens shorter than 13 characters are ignored to reduce false positives on short strings.
+
+The detection engine uses a **single-pass coordinate-based redaction** algorithm that prevents token overlap corruption. All matches are sorted by position, overlaps resolved (longer matches win), and the document is reconstructed in one pass.
+
+Regex patterns for known secret formats (AWS keys, GitHub tokens, Stripe keys, etc.) are applied first, followed by environment variable value matching, then entropy-based detection.
+
+> **Scaling Note**: For deployments requiring >1000 unique PII tokens per session or massive pattern sets, consider swapping the regex OR-join in `restore-tokens` for an Aho-Corasick trie implementation to maintain O(n) performance regardless of vault size.
+
+```
+
 ### ⚠️ Security Notice: `clojure-eval` Escape Hatch
 
 The `clojure-eval` tool is a **privileged escape hatch** that allows the LLM to execute arbitrary Clojure code on the host JVM. This is **Remote Code Execution (RCE) by design**.

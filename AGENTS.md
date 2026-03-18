@@ -134,6 +134,8 @@ We practice **test-driven development with real integration tests**:
 - **Case-insensitive headers** - MCP/HTTP headers are often lowercased by servers; tests must be robust
 - **Config Merging is tricky** - Always prioritize explicit test overrides over file-based config
 - **Loop state is precious** - Changes to the agent loop must be verified against history persistence. Usage tracking should happen at the provider level to allow for reliability scoring and automated cooldowns.
+- **Config Merging is tricky** - Always prioritize explicit test overrides over file-based config
+- **Loop state is precious** - Changes to the agent loop must be verified against history persistence. Usage tracking should happen at the provider level to allow for reliability scoring and automated cooldowns.
 
 ### Self-Monitoring Agents
 
@@ -575,9 +577,11 @@ Instead of mocking HTTP calls, we spin up real in-process servers:
 
 1. **Port 0 allocation** - Let OS assign random free ports to avoid conflicts
 1. **Request tracking** - Test servers store received requests for assertions
+1. **Dynamic Responses** - Use `set-dynamic-response!` to echo back data (like PII tokens) from received requests. This makes tests immune to internal implementation changes like salt derivation or hashing algorithms.
 1. **Configurable responses** - LLM gateway simulator can return predetermined responses
 1. **Fast startup** - http-kit servers start in \<100ms, no Docker overhead
 1. **In-process** - Everything runs in same JVM for easy debugging
+1. **Direct Namespace Execution** - When `bb test` fails to discover a new namespace, verify it with `bb -e "(require 'your.ns) (clojure.test/run-tests 'your.ns)"`. Ensure all new test namespaces are added to `bb.edn`.
 
 **Example Test:**
 
