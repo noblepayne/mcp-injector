@@ -172,3 +172,11 @@
   "Convenience function to start test MCP server with default Stripe tools"
   [& {:keys [response-mode]}]
   (start-server :tools (default-stripe-tools) :response-mode response-mode))
+
+(defn set-mcp-response
+  "Set a tool response for testing. Adds or updates a tool handler."
+  [server tool-name response]
+  (let [new-tool {tool-name {:description (str "Test tool " tool-name)
+                             :schema {:type "object" :properties {}}
+                             :handler (fn [_] response)}}]
+    ((:set-tools! server) new-tool)))

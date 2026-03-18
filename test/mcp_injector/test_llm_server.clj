@@ -27,7 +27,9 @@
                                             :type "function"
                                             :index idx
                                             :function {:name fn-name
-                                                       :arguments (json/generate-string fn-args)}}))
+                                                       :arguments (if (string? fn-args)
+                                                                    fn-args
+                                                                    (json/generate-string fn-args))}}))
                                        (:tool_calls response-data)))}
               :finish_reason (if (:tool_calls response-data) "tool_calls" "stop")}]
     ;; Default usage to nil to avoid polluting stats in tests that don't explicitly set it
@@ -80,7 +82,10 @@
         ;; Default: success
         {:status 200
          :headers {"Content-Type" "application/json"}
-         :body (json/generate-string (build-success-response body (:data response-config)))}))))
+         :body (json/generate-string
+                (if (= :dynamic (:type response-config))
+                  (build-success-response body ((:handler response-config) body))
+                  (build-success-response body (:data response-config))))}))))
 
 (defn handler
   "HTTP handler for Bifrost simulator"
@@ -158,6 +163,12 @@
   [server response-data usage]
   ((:set-response! server) {:type :success
                             :data (assoc response-data :usage usage)}))
+
+(defn set-dynamic-response!
+  "Set a handler function that will build the response data based on the request"
+  [server handler-fn]
+  ((:set-response! server) {:type :dynamic
+                            :handler handler-fn}))
 
 (defn clear-responses
   "Clear all queued responses"

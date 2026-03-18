@@ -26,8 +26,26 @@
    {:id :STRIPE_API_KEY
     :pattern #"\b(sk|pk)_(live|test)_[a-zA-Z0-9]{24,}\b"
     :label "[STRIPE_API_KEY]"}
+   {:id :OPENROUTER_API_KEY
+    :pattern #"\bsk-or-v1-[a-f0-9]{64}\b"
+    :label "[OPENROUTER_API_KEY]"}
+   {:id :OPENAI_PROJECT_KEY
+    :pattern #"\bsk-proj-[a-zA-Z0-9]{48}\b"
+    :label "[OPENAI_PROJECT_KEY]"}
+   {:id :ANTHROPIC_API_KEY
+    :pattern #"\bant-api-key-v1-[a-zA-Z0-9_-]{90,100}(?![a-zA-Z0-9_-])"
+    :label "[ANTHROPIC_API_KEY]"}
+   {:id :GOOGLE_GEMINI_API_KEY
+    :pattern #"\bAIzaSy[a-zA-Z0-9_-]{33}(?![a-zA-Z0-9_-])"
+    :label "[GOOGLE_GEMINI_API_KEY]"}
+   {:id :HUGGINGFACE_TOKEN
+    :pattern #"\bhf_[a-zA-Z0-9]{34,}\b"
+    :label "[HUGGINGFACE_TOKEN]"}
+   {:id :BEARER_TOKEN
+    :pattern #"\bBearer\s+[a-zA-Z0-9._-]{20,}(?![a-zA-Z0-9._-])"
+    :label "[BEARER_TOKEN]"}
    {:id :DATABASE_URL
-    :pattern #"\b(postgresql|mysql|mongodb)://[a-zA-Z0-9._%+-]+:[^@\s]+@[a-zA-Z0-9.-]+:[0-9]+/[a-zA-Z0-9._%+-]+\b"
+    :pattern #"\b(postgresql|mysql|mongodb)://[a-zA-Z0-9._%+-]+:[^@\s]+@[a-zA-Z0-9.-]+:[0-9]+/[a-zA-Z0-9._%+-]+(?![a-zA-Z0-9._%+-])"
     :label "[DATABASE_URL]"}
    {:id :SLACK_WEBHOOK
     :pattern #"\bhttps://hooks.slack.com/services/[A-Z0-9]+/[A-Z0-9]+/[a-zA-Z0-9]+\b"
@@ -59,150 +77,192 @@
         num-classes (count (remove nil? classes))]
     (cond
       (>= num-classes 4) true
-      (= num-classes 3) (>= (count s) 30)  ; 3 classes needs to be longer
+      (= num-classes 3) (>= (count s) 30) ; 3 classes needs to be longer
       :else false)))
 
-(defn- scan-env [text env-vars]
-  (reduce-kv
-   (fn [acc k v]
-     (if (and (not (empty? v)) (> (count v) 5) (str/includes? acc v))
-       (str/replace acc v (str "[ENV_VAR_" k "]"))
-       acc))
-   text
-   env-vars))
+(defn- find-all-coordinates
+  "Scans text for all patterns and return a list of maps containing:
+   {:start <int> :end <int> :id <keyword> :value <string> :label <string>}
+   
+   Pre-compiled env-matches (Patterns) are used to avoid regex thrashing."
+  [text patterns env-patterns-compiled entropy-threshold]
+  (let [;; 1. Pattern matches
+        pattern-matches (mapcat (fn [{:keys [id pattern label]}]
+                                  (let [matcher (re-matcher pattern text)]
+                                    (loop [acc []]
+                                      (if (.find matcher)
+                                        (recur (conj acc {:start (.start matcher)
+                                                          :end (.end matcher)
+                                                          :id id
+                                                          :value (.group matcher)
+                                                          :label label}))
+                                        acc))))
+                                patterns)
+        ;; 2. Pre-compiled Env patterns (Patterns are thread-safe, Matchers are not)
+        env-matches (mapcat (fn [{:keys [id value pattern]}]
+                              (let [matcher (re-matcher pattern text)]
+                                (loop [acc []]
+                                  (if (.find matcher)
+                                    (recur (conj acc {:start (.start matcher)
+                                                      :end (.end matcher)
+                                                      :id id
+                                                      :value value
+                                                      :label (str "[" (name id) "]")}))
+                                    acc))))
+                            env-patterns-compiled)
+        ;; 3. Entropy-based detections
+        ;; Scan for density blocks (non-whitespace characters)
+        entropy-matches (let [matcher (re-matcher #"[^\s]{13,}" text)]
+                          (loop [acc []]
+                            (if (.find matcher)
+                              (let [token (.group matcher)]
+                                (if (and (> (shannon-entropy token) entropy-threshold)
+                                         (character-diversity? token))
+                                  (recur (conj acc {:start (.start matcher)
+                                                    :end (.end matcher)
+                                                    :id :HIGH_ENTROPY_SECRET
+                                                    :value token
+                                                    :label "[HIGH_ENTROPY_SECRET]"}))
+                                  (recur acc)))
+                              acc)))]
+    (concat pattern-matches env-matches entropy-matches)))
 
-(defn- find-env-detections [text env-vars]
+(defn- resolve-coordinates
+  "Sorts coordinates and removes overlaps.
+   Algorithm:
+   1. Sort by start ascending, then by length descending.
+   2. Iterate and keep matches that do not overlap with the previous kept match."
+  [coords]
+  (let [sorted (sort-by (juxt :start (fn [c] (- (:start c) (:end c)))) coords)]
+    (reduce (fn [acc next-match]
+              (let [last-match (peek acc)]
+                (if (or (nil? last-match)
+                        (>= (:start next-match) (:end last-match)))
+                  (conj acc next-match)
+                  acc)))
+            []
+            sorted)))
+
+(defn- apply-redactions
+  "Builds a new string by replacing text at coordinates with labels."
+  [text resolved-coords]
+  (let [sb (StringBuilder.)]
+    (loop [curr-idx 0
+           matches resolved-coords]
+      (if (empty? matches)
+        (do (.append sb (subs text curr-idx))
+            (.toString sb))
+        (let [{:keys [start end label]} (first matches)]
+          (.append sb (subs text curr-idx start))
+          (.append sb label)
+          (recur end (rest matches)))))))
+
+(defn- compile-env-patterns
+  "Helper to pre-compile environment variable values into regex patterns."
+  [env]
   (keep (fn [[k v]]
-          (when (and (not (empty? v)) (> (count v) 5) (str/includes? text v))
-            (keyword (str "ENV_VAR_" k))))
-        env-vars))
-
-(defn- scan-entropy [text threshold]
-  (let [tokens (str/split text #"\s+")]
-    (reduce
-     (fn [acc token]
-       (if (and (> (count token) 20)  ; Increased from 12 to reduce false positives
-                (> (shannon-entropy token) threshold)
-                (character-diversity? token))
-         (str/replace acc token "[HIGH_ENTROPY_SECRET]")
-         acc))
-     text
-     tokens)))
-
-(defn- find-all-matches
-  "Returns a map of {label-id [match1 match2 ...]} for all PII found in text."
-  [text patterns]
-  (reduce
-   (fn [acc {:keys [id pattern]}]
-     (let [matches (re-seq pattern text)]
-       (if (seq matches)
-         (assoc acc id matches)
-         acc)))
-   {}
-   patterns))
+          (when (and (not (empty? v)) (> (count v) 5))
+            {:id (keyword (str "ENV_VAR_" k))
+             :value v
+             :pattern (re-pattern (java.util.regex.Pattern/quote v))}))
+        env))
 
 (defn scan-and-redact
   "Scans input text for PII patterns, high-entropy secrets, and env vars.
    Returns {:text redacted-text :detected [label-ids] :matches {label [raw-matches]}}"
   [text {:keys [patterns entropy-threshold env]
          :or {patterns default-patterns
-              entropy-threshold 4.0
+              entropy-threshold 3.8
               env {}}}]
-  (let [all-matches (find-all-matches text patterns)
-        text-with-labels (reduce
-                          (fn [t [label matches]]
-                            (reduce #(str/replace %1 %2 (name label)) t (distinct matches)))
-                          text
-                          all-matches)
-        env-text (scan-env text-with-labels env)
-        env-detections (find-env-detections text env)
-        final-text (scan-entropy env-text entropy-threshold)
-        entropy-detected (if (not= env-text final-text) [:HIGH_ENTROPY_SECRET] [])
-        detected (distinct (concat (keys all-matches) env-detections entropy-detected))]
-    {:text final-text
+  (let [env-patterns-compiled (compile-env-patterns env)
+        all-coords (find-all-coordinates text patterns env-patterns-compiled entropy-threshold)
+        resolved (resolve-coordinates all-coords)
+        redacted-text (apply-redactions text resolved)
+        detected (distinct (map :id resolved))
+        ;; Build the matches map for backward compatibility
+        matches-map (reduce (fn [acc {:keys [id value]}]
+                              (update acc id (fnil conj []) value))
+                            {}
+                            resolved)]
+    {:text redacted-text
      :detected detected
-     :matches all-matches}))
+     :matches matches-map}))
 
 (defn generate-token
-  "Generate a deterministic, truncated SHA-256 hash token.
-   Uses 24 hex chars (96 bits) providing a collision bound of ~2^48 values per session.
-   For in-memory request vaults (~500 entries), the probability of collision is effectively zero (<10^-20)."
+  "Generate a deterministic, truncated SHA-256 hash token."
   [label value salt]
   (let [input (str (name label) "|" value "|" salt)
-        bytes (.getBytes input "UTF-8")
-        digest (.digest (MessageDigest/getInstance "SHA-256") bytes)
-        hash-str (->> digest
-                      (map (partial format "%02x"))
-                      (apply str))
+        digest (.digest (MessageDigest/getInstance "SHA-256") (.getBytes input "UTF-8"))
+        hash-str (format "%064x" (BigInteger. 1 digest))
         truncated (subs hash-str 0 24)]
     (str "[" (name label) "_" truncated "]")))
 
 (defn- redact-string-value
-  "Redact a single string value, returning [redacted-text new-vault labels-vec].
-   Tokenizes each PII match individually to prevent overflow bypass."
+  "Redact a single string value using coordinates to prevent offset collisions."
   [v config vault]
-  (if-not (string? v)
+  (if (or (not (string? v)) (empty? v))
     [v vault []]
-    (if (empty? v)
-      [v vault []]
-      (let [salt (:salt config)
-            patterns (or (:patterns config) default-patterns)
-            all-matches (find-all-matches v patterns)]
-        (if (empty? all-matches)
-          [v vault []]
-          (let [sorted-labels (keys all-matches)
-                vault-full? (>= (count vault) max-vault-size)]
-            (if vault-full?
-              [(str "[VAULT_OVERFLOW_" (name (first sorted-labels)) "]") vault sorted-labels]
-              (loop [text v
-                     current-vault vault
-                     labels-to-process sorted-labels]
-                (if (empty? labels-to-process)
-                  [text current-vault (mapcat all-matches sorted-labels)]
-                  (let [label (first labels-to-process)
-                        matches (get all-matches label)
-                        ;; Generate unique token for each distinct match value
-                        unique-matches (distinct matches)
-                        new-vault (reduce
-                                   (fn [vault m]
-                                     (let [token (generate-token label m salt)]
-                                       (assoc vault token m)))
-                                   current-vault
-                                   unique-matches)
-                        redacted (reduce
-                                  (fn [t m]
-                                    (let [token (generate-token label m salt)]
-                                      (str/replace t (re-pattern (java.util.regex.Pattern/quote m)) token)))
-                                  text
-                                  unique-matches)]
-                    (recur redacted new-vault (rest labels-to-process))))))))))))
+    (let [salt (:salt config)
+          patterns (or (:patterns config) default-patterns)
+          entropy-threshold (or (:entropy-threshold config) 3.8)
+          env-patterns-compiled (or (:compiled-env config) [])
+          coords (find-all-coordinates v patterns env-patterns-compiled entropy-threshold)
+          resolved (resolve-coordinates coords)]
+      (if (empty? resolved)
+        [v vault []]
+        (if (>= (count vault) max-vault-size)
+          [(str "[VAULT_OVERFLOW_" (name (:id (first resolved))) "]") vault (map :id resolved)]
+          (let [sb (StringBuilder.)
+                [final-vault final-tokens]
+                (loop [curr-idx 0
+                       matches resolved
+                       current-vault vault
+                       tokens []]
+                  (if (empty? matches)
+                    (do (.append sb (subs v curr-idx))
+                        [current-vault tokens])
+                    (let [{:keys [start end id value]} (first matches)
+                          token (generate-token id value salt)
+                          new-vault (assoc current-vault token value)]
+                      (.append sb (subs v curr-idx start))
+                      (.append sb token)
+                      (recur end (rest matches) new-vault (conj tokens value)))))]
+            [(.toString sb) final-vault final-tokens]))))))
 
 (defn- redact-impl
-  "Recursive helper for immutable vault threading.
-   Includes depth limit to prevent StackOverflowError on malicious input."
+  "Recursive helper for immutable vault threading."
   ([data config vault detected]
    (redact-impl data config vault detected 0))
   ([data config vault detected depth]
    (if (>= depth 20)
-     ;; Depth limit reached - return truncated result
      ["[RECURSION_DEPTH_LIMIT]" vault detected]
      (cond
        (string? data)
        (redact-string-value data config vault)
+
        (map? data)
        (reduce
         (fn [[m vault-acc det-acc] [k v]]
           (let [[new-val new-vault new-det] (redact-impl v config vault-acc det-acc (inc depth))]
             [(assoc m k new-val) new-vault (into det-acc new-det)]))
-        [{} vault detected]
+        [(empty data) vault detected]
         data)
+
        (sequential? data)
-       (reduce
-        (fn [[v vault-acc det-acc] item]
-          (let [[new-item new-vault new-det] (redact-impl item config vault-acc det-acc (inc depth))]
-            [(conj v new-item) new-vault (into det-acc new-det)]))
-        [[] vault detected]
-        data)
+       (let [[new-vec final-vault final-det]
+             (reduce
+              (fn [[v vault-acc det-acc] item]
+                (let [[new-item new-vault new-det] (redact-impl item config vault-acc det-acc (inc depth))]
+                  [(conj v new-item) new-vault (into det-acc new-det)]))
+              [[] vault detected]
+              data)]
+         [(cond
+            (or (list? data) (instance? clojure.lang.ISeq data)) (apply list new-vec)
+            (set? data) (into (empty data) new-vec)
+            :else new-vec)
+          final-vault
+          final-det])
+
        :else
        [data vault detected]))))
 
@@ -212,7 +272,11 @@
   ([data config]
    (redact-data data config {}))
   ([data config vault]
-   (let [[redacted final-vault detected] (redact-impl data config vault [] 0)]
+   (let [;; PRE-COMPILE ONCE PER REQUEST (Pattern is thread-safe, Matcher is not)
+         compiled-env (compile-env-patterns (or (:env config) {}))
+         ;; Inject compiled env into config so the recursive walker doesn't recalculate it
+         optimized-config (assoc config :compiled-env compiled-env)
+         [redacted final-vault detected] (redact-impl data optimized-config vault [] 0)]
      [redacted final-vault (distinct detected)])))
 
 (defn restore-tokens

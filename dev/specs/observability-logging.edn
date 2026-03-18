@@ -35,7 +35,7 @@
   - No request-id to correlate logs
   - Some log points missing :model
   - No :endpoint or :url context in errors
-  - Tool execution logged but not tied to specific request"]
+  - Tool execution logged but not tied to specific request"
 
  :proposed-state
  "Enhanced log format with correlation:
@@ -102,7 +102,7 @@
    :tasks
    ["Write integration test that verifies request-id in all logs"
     "Test error scenarios include full context"
-    "Verify no performance regression from extra logging"}]}
+    "Verify no performance regression from extra logging"]}]
 
  :tests
  [{:name "request-id-generated-for-every-request"
