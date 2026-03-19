@@ -14,6 +14,8 @@
             [mcp-injector.storage :as storage]
             [mcp-injector.projection :as projection]))
 
+(declare log-request)
+
 (def ^:private server-state (atom nil))
 (def ^:private usage-stats (atom {}))
 (def ^:private pii-global-salt (atom :unset))
@@ -26,10 +28,7 @@
              (fn [v]
                (if (not= v :unset)
                  v
-                 (let [env (System/getenv "MCP_INJECTOR_PII_SECRET")]
-                   (if (and env (not (str/blank? env)))
-                     env
-                     (str (java.util.UUID/randomUUID))))))))))
+                 (config/resolve-secure-secret "MCP_INJECTOR_PII_SECRET" "PII salt" 16 log-request)))))))
 
 (defn derive-pii-salt
   "Derive a stable salt for PII tokenization using a simple hash.
@@ -648,9 +647,11 @@
               actual-provider (:provider result)
               new-turns (:turns result [])
               projected-new-turns (projection/project-work-log new-turns actual-provider trunc-limit)
-              hmac-secret (System/getenv "INJECTOR_HMAC_SECRET")
+              hmac-secret (:hmac-secret config)
               footer (openai/build-footer projected-new-turns pii-salt hmac-secret)
               _ (log-request "debug" "Generated conversation footer" {:bytes (count footer) :turns (count projected-new-turns)} context)
+              _ (when (str/includes? footer "UNSIGNED")
+                  (log-request "warn" "Using ephemeral HMAC secret - footer UNSIGNED" {} context))
 
               _ (record-completion! model actual-provider (:usage final-resp))
               _ (log-request "info" "Chat Completion Success" {:usage (:usage final-resp) :provider actual-provider} context)
@@ -780,24 +781,11 @@
         audit-log-path (or (:audit-log-path mcp-config)
                            (System/getenv "MCP_INJECTOR_AUDIT_LOG_PATH")
                            "logs/audit.log.ndjson")
-        audit-secret (or (:audit-secret mcp-config)
-                         (System/getenv "INJECTOR_AUDIT_SECRET")
-                         (System/getenv "MCP_INJECTOR_AUDIT_SECRET")
-                         "default-audit-secret")
+        audit-secret (config/resolve-secure-secret "INJECTOR_AUDIT_SECRET" "audit-secret" config/MIN_SECRET_LENGTH log-request)
         eval-timeout-ms (or (:eval-timeout-ms mcp-config)
                             (some-> (System/getenv "MCP_INJECTOR_EVAL_TIMEOUT_MS") not-empty Integer/parseInt)
                             5000)
-        hmac-secret (System/getenv "INJECTOR_HMAC_SECRET")
-
-        _ (when (or (nil? hmac-secret) (< (count hmac-secret) 32))
-            (throw (ex-info "CRITICAL: INJECTOR_HMAC_SECRET environment variable is missing or too short (min 32 bytes)."
-                            {:type :configuration_error :status 500})))
-
-        _ (when (= audit-secret "default-audit-secret")
-            (log-request "critical"
-                         "AUDIT SECURITY WARNING: Using default HMAC secret. Audit logs are forgeable."
-                         {:secret "default"}
-                         {:mode :startup}))
+        hmac-secret (config/resolve-secure-secret "INJECTOR_HMAC_SECRET" "HMAC secret" config/MIN_SECRET_LENGTH log-request)
         base-mcp-servers (cond
                            (and (map? mcp-config) (:servers mcp-config)) mcp-config
                            (:mcp-servers mcp-config) (:mcp-servers mcp-config)
@@ -817,6 +805,7 @@
         final-config {:port port :host host :llm-url llm-url :log-level log-level
                       :max-iterations max-iterations :mcp-config-path mcp-config-path
                       :audit-log-path audit-log-path :audit-secret audit-secret
+                      :hmac-secret hmac-secret
                       :governance (assoc final-governance :eval-timeout-ms eval-timeout-ms)}
         _ (policy/validate-policy! (:policy final-governance))
         _ (let [policy-rules (:policy final-governance)

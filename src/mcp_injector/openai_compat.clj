@@ -1,6 +1,7 @@
 (ns mcp-injector.openai-compat
   "OpenAI API compatibility layer and SSE streaming."
-  (:require [cheshire.core :as json])
+  (:require [cheshire.core :as json]
+            [mcp-injector.config :as config])
   (:import (javax.crypto Mac)
            (javax.crypto.spec SecretKeySpec)
            (java.util Base64)))
@@ -15,25 +16,28 @@
 
 (defn build-footer
   "Build the signed HTML-comment footer for a completed agent loop.
-   Ensures deterministic JSON serialization for consistent signatures."
+   Ensures deterministic JSON serialization for consistent signatures.
+   Returns unsigned footer if secret-key is nil or too short."
   [projected-turns session-id secret-key]
-  (if (or (nil? secret-key) (< (count secret-key) 32))
-    (throw (ex-info "INJECTOR_HMAC_SECRET must be at least 32 bytes"
-                    {:secret-key secret-key}))
-    (let [;; Cheshire's generate-string is generally deterministic, but 
-          ;; explicit key sorting is safer for signing across environments.
-          payload {:source "mcp-injector"
-                   :v 1
-                   :session_id session-id
-                   :turns projected-turns}
-          payload-str (json/generate-string (into (sorted-map) payload))
-          hmac (hmac-sha256 secret-key payload-str)
-          envelope {:hmac hmac :data payload-str}
-          envelope-str (json/generate-string (into (sorted-map) envelope))
-          b64 (.encodeToString
-               (Base64/getEncoder)
-               (.getBytes envelope-str "UTF-8"))]
-      (str "\n\n<!-- x-injector-v1\n" b64 "\n-->"))))
+  (let [payload {:source "mcp-injector"
+                 :v 1
+                 :session_id session-id
+                 :turns projected-turns}
+        payload-str (json/generate-string (into (sorted-map) payload))
+        can-sign? (and secret-key (>= (count secret-key) config/MIN_SECRET_LENGTH))]
+    (if can-sign?
+      (let [hmac (hmac-sha256 secret-key payload-str)
+            envelope {:hmac hmac :data payload-str}
+            envelope-str (json/generate-string (into (sorted-map) envelope))
+            b64 (.encodeToString
+                 (Base64/getEncoder)
+                 (.getBytes envelope-str "UTF-8"))]
+        (str "\n\n<!-- x-injector-v1\n" b64 "\n-->"))
+      (let [warning-msg (format "UNSIGNED: HMAC signature missing or < %d bytes. Session: %s, Turns: %d"
+                                config/MIN_SECRET_LENGTH
+                                session-id
+                                (count projected-turns))]
+        (str "\n\n<!-- x-injector-v1\n" warning-msg "\n-->")))))
 
 (defn parse-chat-request
   "Parse incoming OpenAI chat completion request"
