@@ -40,9 +40,17 @@ Certain high-risk tools (like `clojure-eval`) are marked as **Privileged**. Thes
   :sampling {:trusted-servers ["stripe" "postgres"]}}
  :audit
  {:enabled true :path "logs/audit.log.ndjson"}
- :pii
- {:enabled true :mode :replace}}
+  :pii
+  {:enabled true :mode :replace :proximity-check-enabled true}}
 ```
+
+### PII Hardening & False Positive Reduction
+
+The PII scanner uses a multi-layered approach to minimize false positives while catching real secrets:
+
+1.  **Whitelisting**: Local file paths (Windows/POSIX), URLs, IP addresses, and UUIDs are automatically ignored.
+2.  **Character Diversity**: Tokens must contain at least 4 character classes (lower, upper, digit, special) OR 3 classes with at least 20 characters. This prevents descriptive strings like `mcp__stripe__retrieve_customer` from being flagged.
+3.  **Proximity Check**: By default, general high-entropy strings are only redacted if they follow assignment-like keywords (e.g., `api_key:`, `token =`). Explicit regex patterns (AWS, Anthropic, etc.) bypass this check for maximum safety.
 
 ### PII Restoration (Smart Vault)
 
@@ -134,4 +142,4 @@ services.mcp-injector = {
 
 ______________________________________________________________________
 
-**Status**: Production-ready | **Tests**: 54 passing | **Built with**: Babashka + http-kit + Cheshire
+**Status**: Production-ready | **Tests**: 72 passing | **Built with**: Babashka + http-kit + Cheshire

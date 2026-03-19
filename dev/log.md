@@ -1,5 +1,24 @@
 # Development Log
 
+## 2026-03-19 - Session 007
+
+### PII Scanner Hardening & False Positive Reduction
+
+**Goal:** Reduce noisy redaction of file paths, URLs, and architectural IDs while preserving 100% detection of real secrets.
+
+**Achievements:**
+1.  **Hardened Implementation:** Added `safe-pattern?` whitelisting and `likely-secret-context?` proximity detection.
+2.  **Calibrated Diversity:** Implemented character-diversity rules (3 classes + 20 char threshold) to filter out snake_case identifiers.
+3.  **Restored 100% Test Pass Rate:** Fixed pre-existing ClassCastException in restoration tests and updated PII suite for new logic.
+4.  **Baseline Stability:** Re-established green baseline by fixing coordinate-sorting priority (longest match wins).
+
+**Metrics:**
+- **Tests Passing:** 72/72 (Up from 54)
+- **Assertions:** 232
+- **Linter:** Clean
+
+---
+
 ## 2026-02-14 - Session 006
 
 ### Flake Audit & NixOS Module Fixes
