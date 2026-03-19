@@ -4,12 +4,15 @@
             [cheshire.core :as json]
             [clojure.string :as str]
             [clojure.java.io :as io]
+            [clojure.stacktrace]
             [mcp-injector.config :as config]
             [mcp-injector.openai-compat :as openai]
             [mcp-injector.mcp-client :as mcp]
             [mcp-injector.audit :as audit]
             [mcp-injector.pii :as pii]
-            [mcp-injector.policy :as policy]))
+            [mcp-injector.policy :as policy]
+            [mcp-injector.storage :as storage]
+            [mcp-injector.projection :as projection]))
 
 (def ^:private server-state (atom nil))
 (def ^:private usage-stats (atom {}))
@@ -385,26 +388,58 @@
                      (assoc-in tc [:function :arguments] (json/generate-string restored)))))
                tool-calls)))
 
-(defn- agent-loop [llm-url payload mcp-servers max-iterations governance]
+(defn- message->work-log-entry
+  [message provider model turn-index]
+  (let [content-blocks (cond-> []
+                         (and (:content message) (not-empty (:content message)))
+                         (conj {:type "text" :text (:content message)})
+
+                         (:thinking message)
+                         (conj {:type "thinking"
+                                :thinking (:thinking message)
+                                :signature (:signature message)})
+
+                         (seq (:tool_calls message))
+                         (into (mapv (fn [tc]
+                                       {:type "tool_use"
+                                        :id (:id tc)
+                                        :name (get-in tc [:function :name])
+                                        :input (try (json/parse-string (get-in tc [:function :arguments]) true)
+                                                    (catch Exception _ {}))})
+                                     (:tool_calls message))))]
+    {:role "assistant"
+     :content content-blocks
+     :_meta {:provider provider
+             :model model
+             :turn-index turn-index
+             :timestamp (str (java.time.Instant/now))}}))
+
+(defn- tool-result->work-log-entry
+  [tool-call-id _tool-name result provider model turn-index]
+  {:role "tool"
+   :content [{:type "tool_result"
+              :tool_use_id tool-call-id
+              :content [{:type "text" :text result}]}]
+   :_meta {:provider provider
+           :model model
+           :turn-index turn-index
+           :timestamp (str (java.time.Instant/now))}})
+
+(defn- agent-loop [llm-url payload mcp-servers max-iterations governance pii-salt]
   (let [model (:model payload)
         vault {}
         request-id (or (:request-id payload) (str (java.util.UUID/randomUUID)))
-        session-id (or (get-in payload [:extra_body :session-id])
-                       (get-in payload [:extra_body :user])
-                       (:user payload)
-                       request-id)
-        pii-salt (derive-pii-salt session-id)
         context {:model model :request-id request-id :session-id pii-salt}
-        _ (when (= session-id request-id)
-            (log-request "debug" "No session-id provided. Tokens will be request-scoped (unstable)." {} context))
         [init-messages init-vault] (scrub-messages (:messages payload) vault pii-salt governance)]
     (loop [current-payload (assoc payload :messages init-messages :request-id request-id)
            vault-state init-vault
            discovered-state {}
-           iteration 0]
+           iteration 0
+           turns-acc []]
       (if (>= iteration max-iterations)
         {:success true
          :provider model
+         :turns turns-acc
          :data {:choices [{:index 0
                            :message {:role "assistant"
                                      :content "Maximum iterations reached."
@@ -413,18 +448,31 @@
         (let [_ (log-request "info" "Tool Loop" {:iteration iteration :calls (count (get-in current-payload [:messages]))} context)
               resp (call-llm llm-url current-payload)]
           (if-not (:success resp)
-            resp
+            (assoc resp :turns turns-acc)
             (let [choices (get-in resp [:data :choices])
                   message (get-in (first choices) [:message])
-                  tool-calls (:tool_calls message)]
+                  tool-calls (:tool_calls message)
+                  provider model ; Use the requested model as provider for metadata
+                  entry (message->work-log-entry message provider model iteration)
+                  _ (storage/append-turn! pii-salt entry)
+                  turns-acc (conj turns-acc entry)]
               (if-not (seq tool-calls)
-                (assoc resp :provider model)
+                (assoc resp :provider model :turns turns-acc)
                 (let [internal-calls (filter #(internal-call? (get-in % [:function :name])) tool-calls)
                       passthrough-calls (filter #(not (internal-call? (get-in % [:function :name]))) tool-calls)]
                   (if (seq internal-calls)
-                    ;; RULE: Strict Priority. If any internal calls exist, execute them and recur.
                     (let [[results new-vault new-discovered]
                           (execute-internal-batch internal-calls vault-state discovered-state mcp-servers governance context)
+                          ;; Append tool results to turns
+                          tool-turns (mapv (fn [res _tc]
+                                             (let [te (tool-result->work-log-entry
+                                                       (:tool_call_id res)
+                                                       (:name res)
+                                                       (:content res)
+                                                       provider model iteration)]
+                                               (storage/append-turn! pii-salt te)
+                                               te))
+                                           results internal-calls)
                           new-tools (vec (concat (config/get-meta-tool-definitions)
                                                  (map (fn [[name schema]]
                                                         {:type "function"
@@ -440,10 +488,11 @@
                                  (assoc :tools new-tools))
                              post-vault
                              new-discovered
-                             (inc iteration)))
-                    ;; RULE: Exclusively passthrough. Hand off to Gateway.
+                             (inc iteration)
+                             (into turns-acc tool-turns)))
                     (let [handoff-msg (prepare-passthrough-handoff message passthrough-calls vault-state mcp-servers governance)]
-                      (assoc-in resp [:data :choices 0 :message] handoff-msg))))))))))))
+                      (assoc-in (assoc resp :provider model :turns turns-acc)
+                                [:data :choices 0 :message] handoff-msg))))))))))))
 
 (defn- set-cooldown! [provider minutes]
   (swap! cooldown-state assoc provider (+ (System/currentTimeMillis) (* minutes 60 1000))))
@@ -507,73 +556,111 @@
                                   msgs)))
         (assoc :tools merged-tools))))
 
-(defn- try-virtual-model-chain [config prepared-req llm-url mcp-servers max-iterations governance]
+(defn- try-virtual-model-chain [config prepared-req llm-url mcp-servers max-iterations governance pii-salt]
   (let [chain (:chain config)
         retry-on (set (:retry-on config [429 500]))
         cooldown-mins (get config :cooldown-minutes 5)
         original-model (:model prepared-req)]
     (loop [providers (filter #(not (is-on-cooldown? %)) chain)
-           last-error nil]
+           last-error nil
+           turns-acc []]
       (if (empty? providers)
-        {:success false :status 502 :error (or last-error {:message "All providers failed"})}
+        {:success false :status 502 :error (or last-error {:message "All providers failed"}) :turns turns-acc}
         (let [provider (first providers)
               _ (log-request "info" "Virtual model: trying provider" {:provider provider :remaining (count (rest providers))}
                              {:model original-model :endpoint llm-url})
               req (-> prepared-req
                       (assoc :model provider)
                       (dissoc :fallbacks))
-              result (agent-loop llm-url req mcp-servers max-iterations governance)]
+              result (agent-loop llm-url req mcp-servers max-iterations governance pii-salt)]
           (if (:success result)
-            (assoc result :provider provider)
+            (assoc result :provider provider :turns (into turns-acc (:turns result)))
             (if (some #(= % (:status result)) retry-on)
               (do
                 (log-request "warn" "Virtual model: provider failed, setting cooldown" {:provider provider :status (:status result) :cooldown-mins cooldown-mins}
                              {:model original-model :endpoint llm-url})
                 (set-cooldown! provider cooldown-mins)
                 (track-provider-failure! provider (:status result))
-                (recur (rest providers) (:error result)))
-              (assoc result :provider provider))))))))
+                (recur (rest providers) (:error result) (into turns-acc (:turns result))))
+              (assoc result :provider provider :turns (into turns-acc (:turns result))))))))))
+
+(defn- extract-session-id [chat-req _payload request-id]
+  (or (get-in chat-req [:extra_body :session-id])
+      (get-in chat-req [:extra_body :user])
+      (:user chat-req)
+      request-id))
 
 (defn- handle-chat-completion [request mcp-servers config]
   (try
     (let [chat-req (parse-body (:body request))
           model (:model chat-req)
-          _ (log-request "info" "Chat Completion Started" {:stream (:stream chat-req)} {:model model})
+          request-id (or (:request-id chat-req) (str (java.util.UUID/randomUUID)))
+          session-id (extract-session-id chat-req chat-req request-id)
+          pii-salt (derive-pii-salt session-id)
+          trunc-limit (:truncation-limit config 8192)
+          context {:model model :request-id request-id :session-id pii-salt}
+          _ (log-request "info" "Chat Completion Started" {:stream (:stream chat-req)} context)
+          _ (when (= session-id request-id)
+              (log-request "debug" "No session-id provided. Tokens will be request-scoped (unstable)." {} context))
+
+          ;; --- Re-hydration ---
+          history (storage/get-session pii-salt)
+          projected-history (projection/project-work-log history model trunc-limit)
+          history-messages (projection/work-log->openai-messages projected-history)
+          _ (when (seq history-messages)
+              (log-request "debug" "Re-hydrated session history" {:turns (count history-messages)} context))
+
           discovered (reduce (fn [acc [s-name s-conf]]
                                (let [url (or (:url s-conf) (:uri s-conf))
                                      cmd (:cmd s-conf)]
                                  (if (or url cmd)
                                    (try (assoc acc s-name (mcp/discover-tools (name s-name) s-conf (:tools s-conf) (:policy (:governance config))))
                                         (catch Exception e
-                                          (log-request "warn" "Discovery failed" {:server s-name :error (.getMessage e)} {:model model})
+                                          (log-request "warn" "Discovery failed" {:server s-name :error (.getMessage e)} context)
                                           acc))
                                    acc)))
                              {} (:servers mcp-servers))
-          messages (config/inject-tools-into-messages (:messages chat-req) mcp-servers discovered)
+
+          ;; Prepend history to incoming messages
+          messages (vec (concat history-messages (:messages chat-req)))
+          injected-messages (config/inject-tools-into-messages messages mcp-servers discovered)
+
           llm-url (or (:llm-url config) (config/get-llm-url mcp-servers))
           virtual-models (config/get-virtual-models mcp-servers)
           virtual-config (or (get virtual-models model) (get virtual-models (keyword model)))
-          prepared-req (prepare-llm-request (assoc chat-req :messages messages) mcp-servers)
+          prepared-req (prepare-llm-request (assoc chat-req :messages injected-messages :request-id request-id) mcp-servers)
           max-iter (or (:max-iterations config) 10)
           gov (:governance config)
           result (if virtual-config
-                   (try-virtual-model-chain virtual-config prepared-req llm-url mcp-servers max-iter gov)
-                   (agent-loop llm-url prepared-req mcp-servers max-iter gov))]
+                   (try-virtual-model-chain virtual-config prepared-req llm-url mcp-servers max-iter gov pii-salt)
+                   (agent-loop llm-url prepared-req mcp-servers max-iter gov pii-salt))]
+
       (if (:success result)
         (let [final-resp (:data result)
               actual-provider (:provider result)
+              new-turns (:turns result [])
+              projected-new-turns (projection/project-work-log new-turns actual-provider trunc-limit)
+              hmac-secret (System/getenv "INJECTOR_HMAC_SECRET")
+              footer (openai/build-footer projected-new-turns pii-salt hmac-secret)
+              _ (log-request "debug" "Generated conversation footer" {:bytes (count footer) :turns (count projected-new-turns)} context)
+
               _ (record-completion! model actual-provider (:usage final-resp))
-              _ (log-request "info" "Chat Completion Success" {:usage (:usage final-resp) :provider actual-provider} {:model model})
+              _ (log-request "info" "Chat Completion Success" {:usage (:usage final-resp) :provider actual-provider} context)
+
+              content (get-in final-resp [:choices 0 :message :content])
+              final-content (str (or content "") footer)
+              tool-calls (get-in final-resp [:choices 0 :message :tool_calls])
+
               body (if (:stream chat-req)
                      (openai/build-chat-response-streaming
-                      {:content (get-in final-resp [:choices 0 :message :content])
-                       :tool-calls (get-in final-resp [:choices 0 :message :tool_calls])
+                      {:content final-content
+                       :tool-calls tool-calls
                        :model model
                        :usage (:usage final-resp)})
                      (json/generate-string
                       (openai/build-chat-response
-                       {:content (get-in final-resp [:choices 0 :message :content])
-                        :tool-calls (get-in final-resp [:choices 0 :message :tool_calls])
+                       {:content final-content
+                        :tool-calls tool-calls
                         :model model
                         :usage (:usage final-resp)})))]
           {:status 200 :headers {"Content-Type" (if (:stream chat-req) "text/event-stream" "application/json")} :body body})
@@ -581,7 +668,7 @@
               error-data (:error result)
               error-msg (if (map? error-data) (:message error-data) (str "Failed: " error-data))
               error-type (get-in result [:error :type] "internal_error")
-              _ (log-request "warn" "Chat Completion Failed" {:status status :error error-msg :type error-type} {:model model :endpoint llm-url})
+              _ (log-request "warn" "Chat Completion Failed" {:status status :error error-msg :type error-type} (assoc context :endpoint llm-url))
               body (if (:stream chat-req)
                      (str "data: " (json/generate-string {:error {:message error-msg :type error-type :details (get-in result [:error :details])}}) "\n\ndata: [DONE]\n\n")
                      (json/generate-string {:error {:message error-msg :type error-type :details (get-in result [:error :details])}}))]
@@ -590,15 +677,11 @@
       (let [err-data (ex-data e)
             status (or (:status err-data) 500)
             err-type (or (some-> err-data :type name) "internal_error")
-            ;; Only surface messages from our own ex-info throws
-            ;; Never surface raw Java exception messages at the boundary
-            safe-msg (or (:message err-data)
-                         "Internal server error")]
-        (log-request "error" "Chat completion failed" {:type err-type :message (.getMessage e)} {}) ; full detail in logs
+            safe-msg (or (:message err-data) "Internal server error")]
+        (log-request "error" "Chat completion failed" {:type err-type :message (.getMessage e) :stacktrace (with-out-str (clojure.stacktrace/print-stack-trace e))} {})
         {:status status
          :headers {"Content-Type" "application/json"}
-         :body (json/generate-string {:error {:message safe-msg
-                                              :type err-type}})}))))
+         :body (json/generate-string {:error {:message safe-msg :type err-type}})}))))
 
 (defn get-gateway-state []
   {:cooldowns @cooldown-state
@@ -690,11 +773,18 @@
                            (System/getenv "MCP_INJECTOR_AUDIT_LOG_PATH")
                            "logs/audit.log.ndjson")
         audit-secret (or (:audit-secret mcp-config)
+                         (System/getenv "INJECTOR_AUDIT_SECRET")
                          (System/getenv "MCP_INJECTOR_AUDIT_SECRET")
                          "default-audit-secret")
         eval-timeout-ms (or (:eval-timeout-ms mcp-config)
                             (some-> (System/getenv "MCP_INJECTOR_EVAL_TIMEOUT_MS") not-empty Integer/parseInt)
                             5000)
+        hmac-secret (System/getenv "INJECTOR_HMAC_SECRET")
+
+        _ (when (or (nil? hmac-secret) (< (count hmac-secret) 32))
+            (throw (ex-info "CRITICAL: INJECTOR_HMAC_SECRET environment variable is missing or too short (min 32 bytes)."
+                            {:type :configuration_error :status 500})))
+
         _ (when (= audit-secret "default-audit-secret")
             (log-request "critical"
                          "AUDIT SECURITY WARNING: Using default HMAC secret. Audit logs are forgeable."

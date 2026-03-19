@@ -1,6 +1,39 @@
 (ns mcp-injector.openai-compat
   "OpenAI API compatibility layer and SSE streaming."
-  (:require [cheshire.core :as json]))
+  (:require [cheshire.core :as json])
+  (:import (javax.crypto Mac)
+           (javax.crypto.spec SecretKeySpec)
+           (java.util Base64)))
+
+(defn hmac-sha256 [secret data-str]
+  (let [mac (Mac/getInstance "HmacSHA256")
+        key-spec (SecretKeySpec. (.getBytes secret "UTF-8") "HmacSHA256")]
+    (.init mac key-spec)
+    (->> (.doFinal mac (.getBytes data-str "UTF-8"))
+         (map #(format "%02x" (Byte/toUnsignedInt %)))
+         (apply str))))
+
+(defn build-footer
+  "Build the signed HTML-comment footer for a completed agent loop.
+   Ensures deterministic JSON serialization for consistent signatures."
+  [projected-turns session-id secret-key]
+  (if (or (nil? secret-key) (< (count secret-key) 32))
+    (throw (ex-info "INJECTOR_HMAC_SECRET must be at least 32 bytes"
+                    {:secret-key secret-key}))
+    (let [;; Cheshire's generate-string is generally deterministic, but 
+          ;; explicit key sorting is safer for signing across environments.
+          payload {:source "mcp-injector"
+                   :v 1
+                   :session_id session-id
+                   :turns projected-turns}
+          payload-str (json/generate-string (into (sorted-map) payload))
+          hmac (hmac-sha256 secret-key payload-str)
+          envelope {:hmac hmac :data payload-str}
+          envelope-str (json/generate-string (into (sorted-map) envelope))
+          b64 (.encodeToString
+               (Base64/getEncoder)
+               (.getBytes envelope-str "UTF-8"))]
+      (str "\n\n<!-- x-injector-v1\n" b64 "\n-->"))))
 
 (defn parse-chat-request
   "Parse incoming OpenAI chat completion request"
