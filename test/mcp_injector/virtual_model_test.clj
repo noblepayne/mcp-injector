@@ -37,6 +37,7 @@
 (use-fixtures :each
   (fn [t]
     (test-llm/clear-responses (:llm @test-state))
+    (test-llm/clear-requests (:llm @test-state))
     (core/reset-usage-stats!)
     (core/reset-cooldowns!)
     (t)))
@@ -89,16 +90,18 @@
                 {:body (json/generate-string {:model "brain" :messages [{:role "user" :content "hi"}]})})
 
     (test-llm/clear-responses (:llm @test-state))
+    (test-llm/clear-requests (:llm @test-state))
     (test-llm/set-next-response (:llm @test-state) {:role "assistant" :content "Immediate success"})
 
     ;; Second call should hit provider 2 immediately because provider 1 is on cooldown
     (let [response @(http/post (str "http://localhost:" (:port (:injector @test-state)) "/v1/chat/completions")
                                {:body (json/generate-string {:model "brain" :messages [{:role "user" :content "hi"}]})})
-          body (json/parse-string (body->string (:body response)) true)]
+          body (json/parse-string (body->string (:body response)) true)
+          requests @(:received-requests (:llm @test-state))]
       (is (= 200 (:status response)))
       (is (= "Immediate success" (strip-footer (get-in body [:choices 0 :message :content]))))
-      ;; Verify LLM only received one request (provider 2)
-      (is (= 1 (count @(:received-requests (:llm @test-state))))))))
+      (is (= 1 (count requests)))
+      (is (= "provider2" (:model (first requests)))))))
 
 (deftest test-usage-tracking-in-fallback
   (testing "Usage stats are aggregated across fallback attempts"
@@ -137,13 +140,15 @@
 
 (deftest test-virtual-model-response-scrubbing
   (testing "Virtual model responses are scrubbed for PII"
-    (test-llm/set-next-response (:llm @test-state) {:role "assistant" :content "The email is wes@example.com"})
-    (let [response @(http/post (str "http://localhost:" (:port (:injector @test-state)) "/v1/chat/completions")
-                               {:body (json/generate-string {:model "brain" :messages [{:role "user" :content "hi"}]})})
+    (let [_ (test-llm/set-next-response (:llm @test-state) {:role "assistant" :content "The email is wes@example.com"})
+          response @(http/post (str "http://localhost:" (:port (:injector @test-state)) "/v1/chat/completions")
+                               {:body (json/generate-string {:model "brain"
+                                                             :messages [{:role "user" :content "hi"}]
+                                                             :user "static-user"})})
           body (json/parse-string (body->string (:body response)) true)
           content (get-in body [:choices 0 :message :content])]
       (is (not (str/includes? content "wes@example.com")))
-      (is (re-find #"\[EMAIL_ADDRESS_[a-f0-9]+\]" content)))))
+      (is (re-find #"\[EMAIL_ADDRESS_[a-f0-9]{24}\]" content)))))
 
 (defn -main [& _args]
   (clojure.test/run-tests 'mcp-injector.virtual-model-test))

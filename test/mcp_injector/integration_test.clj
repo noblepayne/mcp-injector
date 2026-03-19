@@ -140,7 +140,9 @@
 
       ;; Verify final response
       (is (= 200 (:status response)))
-      (is (str/includes? (strip-footer (get-in body [:choices 0 :message :content])) "customer@example.com"))
+      ;; Redaction is now active on the final response by default
+      (is (not (str/includes? (strip-footer (get-in body [:choices 0 :message :content])) "customer@example.com")))
+      (is (str/includes? (strip-footer (get-in body [:choices 0 :message :content])) "[EMAIL_ADDRESS_"))
 
       ;; Verify LLM was called 3 times (discovery + execution + final)
       (is (= 3 (count @(:received-requests *test-llm*)))))))
