@@ -7,6 +7,8 @@ mcp-injector sits between an agent (like OpenClaw) and LLM gateways. It provides
 ## Key Features
 
 - ✅ **Virtual model chains** - Define fallback providers with cooldowns.
+- ✅ **Transparent Loop Preservation** - Accumulates all internal turns (reasoning, tool calls, results) and synchronizes them with clients via signed footers.
+- ✅ **Session Re-hydration** - Automatically restores conversation context from durable storage when a `session-id` is provided.
 - ✅ **Governance Framework** - Declarative tool access policies (Permissive/Strict).
 - ✅ **PII Scanning & Restoration** - Automatic redaction of sensitive data in prompts. Trusted tools can receive original PII values for secure processing.
 - ✅ **Signed Audit Trail** - Tamper-proof NDJSON logs with ULID and HMAC chaining.
@@ -100,6 +102,15 @@ Copy the example config and customize:
 ```bash
 cp mcp-servers.example.edn mcp-servers.edn
 ```
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `INJECTOR_HMAC_SECRET` | **Required**. 32-byte secret for signing conversation history footers. | (none) |
+| `INJECTOR_DATA_DIR` | Directory for durable session logs. | `.injector/sessions` |
+| `MCP_INJECTOR_PORT` | Server port. | `8080` |
+| `MCP_INJECTOR_LLM_URL` | LLM gateway endpoint. | `http://localhost:11434` |
 
 Edit `mcp-servers.edn`:
 

@@ -81,7 +81,8 @@
      :log-level (env-var "MCP_INJECTOR_LOG_LEVEL" (:log-level default-config))
      :timeout-ms (parse-int (env-var "MCP_INJECTOR_TIMEOUT_MS") (:timeout-ms default-config))
      :audit-log-path (resolve-audit-path env-audit-path)
-     :audit-secret (or env-audit-secret (:audit-secret default-config))}))
+     :audit-secret (or env-audit-secret (:audit-secret default-config))
+     :truncation-limit (parse-int (env-var "MCP_INJECTOR_TRUNCATION_LIMIT") 8192)}))
 
 (defn get-env [name]
   (System/getenv name))
@@ -370,6 +371,7 @@
                        (env-var "MCP_INJECTOR_AUDIT_SECRET")
                        (:audit-secret env)
                        "default-audit-secret")
+     :truncation-limit (:truncation-limit env)
      :governance gov}))
 
 (defn get-llm-url

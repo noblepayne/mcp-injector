@@ -24,7 +24,7 @@
     :pattern #"\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,}\b"
     :label "[GITHUB_TOKEN]"}
    {:id :STRIPE_API_KEY
-    :pattern #"\b(sk|pk)_(live|test)_[a-zA-Z0-9]{24,}\b"
+    :pattern #"\b(sk|pk|rk)_(live|test|production)_[a-zA-Z0-9]{24,}\b"
     :label "[STRIPE_API_KEY]"}
    {:id :OPENROUTER_API_KEY
     :pattern #"\bsk-or-v1-[a-f0-9]{64}\b"
@@ -52,7 +52,13 @@
     :label "[SLACK_WEBHOOK]"}
    {:id :PRIVATE_KEY_HEADER
     :pattern #"\b-----BEGIN (RSA|EC|DSA|OPENSSH) PRIVATE KEY-----\b"
-    :label "[PRIVATE_KEY_HEADER]"}])
+    :label "[PRIVATE_KEY_HEADER]"}
+   {:id :HEX_64
+    :pattern #"\b[a-f0-9]{64}\b"
+    :label "[HEX_64]"}
+   {:id :GENERIC_SECRET
+    :pattern #"\b[A-Za-z0-9+/_-]{48,}\b"
+    :label "[GENERIC_SECRET]"}])
 
 (defn shannon-entropy
   "Calculates the Shannon entropy of a string."
@@ -107,7 +113,7 @@
   "Check if token follows assignment-like patterns.
    Uses a proximity window before the token to detect assignment syntax."
   [text start-pos]
-  (let [window-size 30
+  (let [window-size 40 ; Slightly larger window for shell exports
         context-start (max 0 (- start-pos window-size))
         context (subs text context-start start-pos)]
     (some #(re-find % context)
@@ -116,7 +122,13 @@
            #"(?i)token\s*[:=]"
            #"(?i)password\s*[:=]"
            #"(?i)credential\s*[:=]"
-           #"(?i)auth(entication)?\s*[:=(]"])))
+           #"(?i)auth(entication)?\s*[:=(]"
+           #"(?i)[A-Z0-9_]+_KEY\s*[:=]"
+           #"(?i)[A-Z0-9_]+_TOKEN\s*[:=]"
+           #"(?i)\"?[a-z0-9_-]*(key|token|secret|pass)\"?\s*[:=]" ; JSON keys and lower-case env
+           #"(?i)export\s+[A-Z0-9_]+\s*=" ; shell export
+           #"(?i)set\s+[a-z0-9_]+\s+" ; set command
+           #"\s+[a-z0-9_]+->\s*"])))
 
 (defn- find-all-coordinates
   "Scans text for all patterns and return a list of maps containing:

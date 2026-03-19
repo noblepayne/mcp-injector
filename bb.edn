@@ -1,6 +1,7 @@
 {:paths ["src" "test"]
  :deps {http-kit/http-kit {:mvn/version "2.8.0"}
-        cheshire/cheshire {:mvn/version "5.13.0"}}
+        cheshire/cheshire {:mvn/version "5.13.0"}
+        metosin/malli {:mvn/version "0.20.1"}}
 
  :tasks
  {test {:doc "Run all tests"
