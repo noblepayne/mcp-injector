@@ -4,7 +4,7 @@
             [cheshire.core :as json]
             [babashka.http-client :as http]
             [mcp-injector.core :as core]
-            [mcp-injector.pii :as pii]
+
             [mcp-injector.test-mcp-server :as mcp-server]
             [mcp-injector.test-llm-server :as llm-server]))
 
@@ -24,10 +24,6 @@
   (mcp-server/stop-server (:mcp sys))
   (llm-server/stop-server (:llm sys))
   (core/stop-server (:injector sys)))
-
-(defn- get-token [id value session-id]
-  (let [salt (core/derive-pii-salt session-id)]
-    (pii/generate-token id value salt)))
 
 (defn- extract-token [req]
   (let [content (get-in (last (:messages req)) [:content])]

@@ -77,6 +77,9 @@
             echo "  nix build       - Build the package"
             echo "  nix run         - Run the built package"
             echo ""
+            # Dev-only secret for tests. DO NOT use in production.
+            export INJECTOR_HMAC_SECRET="dev-mode-secret-do-not-use-in-production-at-least-32-chars"
+
             export SHELL=$OLDSHELL
           '';
         };
@@ -110,7 +113,7 @@
             } ''
               # Merge mcpServers and governance into a single EDN file
               # mcpServers should contain {:servers {...} :llm-gateway {...}}
-              echo '${builtins.toJSON (cfg.mcpServers // { governance = cfg.governance; })}' | jet -i json -o edn -k > $out
+              echo '${builtins.toJSON (cfg.mcpServers // {governance = cfg.governance;})}' | jet -i json -o edn -k > $out
             '';
         in {
           options.services.mcp-injector = {
@@ -134,28 +137,28 @@
               description = "URL of OpenAI-compatible LLM endpoint";
             };
 
-             mcpServers = mkOption {
-               type = types.attrs;
-               default = {};
-               description = "MCP server configurations";
-               example = literalExpression ''
-                 {
-                   stripe = {
-                     url = "http://localhost:3001/mcp";
-                     trust = "restore";  # "none" (default) or "restore"
-                     tools = ["retrieve_customer" "list_charges"];
-                   };
-                   workspace = {
-                     url = "http://localhost:3000/mcp";
-                     trust = "restore";
-                     tools = [
-                       { name = "read"; trust = "restore"; }
-                       { name = "write"; trust = "restore"; }
-                     ];
-                   };
-                 }
-               '';
-             };
+            mcpServers = mkOption {
+              type = types.attrs;
+              default = {};
+              description = "MCP server configurations";
+              example = literalExpression ''
+                {
+                  stripe = {
+                    url = "http://localhost:3001/mcp";
+                    trust = "restore";  # "none" (default) or "restore"
+                    tools = ["retrieve_customer" "list_charges"];
+                  };
+                  workspace = {
+                    url = "http://localhost:3000/mcp";
+                    trust = "restore";
+                    tools = [
+                      { name = "read"; trust = "restore"; }
+                      { name = "write"; trust = "restore"; }
+                    ];
+                  };
+                }
+              '';
+            };
 
             governance = mkOption {
               type = types.submodule {
@@ -175,7 +178,7 @@
                     default = {
                       enabled = true;
                       mode = "replace";
-                      trust = "restore";  # "none" (redacted), "restore" (tokenized restoration)
+                      trust = "restore"; # "none" (redacted), "restore" (tokenized restoration)
                     };
                     description = "PII scanning configuration. Trust levels: none (redacted), restore (tokenized restoration).";
                   };
@@ -270,6 +273,7 @@
                 MCP_INJECTOR_LLM_URL = cfg.llmUrl;
                 MCP_INJECTOR_LOG_LEVEL = cfg.logLevel;
                 MCP_INJECTOR_MAX_ITERATIONS = toString cfg.maxIterations;
+                INJECTOR_DATA_DIR = "/var/lib/mcp-injector/sessions";
                 MCP_INJECTOR_TIMEOUT_MS = toString cfg.timeoutMs;
                 MCP_INJECTOR_EVAL_TIMEOUT_MS = toString cfg.evalTimeoutMs;
                 MCP_INJECTOR_MCP_CONFIG = mcpServersConfig;
