@@ -83,8 +83,7 @@
         (let [mcp-requests @(:received-requests mcp)
               tool-calls (filter #(= "tools/call" (get-in % [:body :method])) mcp-requests)
               update-call (last tool-calls)
-              args-str (get-in update-call [:body :params :arguments])
-              args (when args-str (json/parse-string args-str true))]
+              args (get-in update-call [:body :params :arguments])]
           (is (= secret-email (or (:email args) (get args "email")))))))))
 
 (deftest test-edit-tool-with-pii-token
@@ -132,7 +131,6 @@
             mcp-requests @(:received-requests mcp)
             tool-calls (filter #(= "tools/call" (get-in % [:body :method])) mcp-requests)
             edit-call (last tool-calls)
-            args-str (when edit-call (get-in edit-call [:body :params :arguments]))
-            args (when args-str (json/parse-string args-str true))]
+            args (when edit-call (get-in edit-call [:body :params :arguments]))]
         (is (= 200 (:status response)))
         (is (= secret-email (or (:old_string args) (get args "old_string"))))))))

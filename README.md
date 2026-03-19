@@ -1,87 +1,74 @@
 # mcp-injector
 
-> "The Agency belongs in the Gateway."
+> Resilient LLM gateway shim with virtual models, provider fallbacks, and secure MCP tool injection
 
-`mcp-injector` is a **Minimal Agent Kernel** designed to sit between an Agent Gateway (like OpenClaw) and an LLM. It provides a secure, semi-transparent recursive tool loop for injected tools while delegating ultimate agency back to the Gateway.
+mcp-injector sits between an agent (like OpenClaw) and LLM gateways. It provides automatic failover, error translation, and a secure governance framework for MCP tool execution.
 
-## Core Philosophy
+## Key Features
 
-- **Minimal Kernel**: mcp-injector handles the recursive execution of its own tools (`mcp__*`, `clojure-eval`, `get_tool_schema`) but stays out of the way for everything else.
-- **Strict Priority Handoff**: The kernel finishes its internal tool chain before handing off to the Gateway.
-- **Smart PII Membrane**: Sensitive data is automatically redacted into session-scoped tokens before reaching the LLM, and restored only at the last second before tool execution or handoff.
-- **Selective Pass-through Trust**: Trust levels for non-injected tools (owned by the Gateway) are managed via granular configuration.
-
-## Selective Passthrough Handoff
-
-The kernel executes internal tools and only hands off to the Gateway when a tool batch consists **exclusively** of external (passthrough) tools.
-
-### The Decision Tree
-1. If a tool batch contains **any** internal tool:
-   - Kernel executes all internal tools.
-   - Results are redacted (PII -> Tokens).
-   - Conversation history is updated.
-   - **Kernel recurs** (ignores passthrough tools in that turn).
-2. If a tool batch is **exclusively passthrough**:
-   - Kernel restores PII (Tokens -> Real values) based on trust rules.
-   - Kernel **hands off** the request to the Gateway.
-
-This ensures the Gateway always receives a complete, coherent context containing the results of all relevant internal tools.
-
-## Pass-through Trust Governance
-
-By default, the kernel trusts all tools (`:passthrough-trust :restore-all`). You can restrict this in your `mcp-servers.edn`:
-
-```clojure
-:governance
-{:passthrough-trust
- {"read_file" :restore  ; Trusted (default)
-  "exec" :block         ; Untrusted: received redacted tokens only
-  "*" :restore}}        ; Wildcard support
-```
-
-Trust Levels:
-- `:restore`: Swap `[CATEGORY_hash]` tokens back to original values in tool arguments.
-- `:none`: Leave tokens redacted (Gateway sees the token).
-- `:block`: Terminate the call if PII is detected in arguments.
+- ✅ **Virtual model chains** - Define fallback providers with cooldowns.
+- ✅ **Governance Framework** - Declarative tool access policies (Permissive/Strict).
+- ✅ **PII Scanning & Restoration** - Automatic redaction of sensitive data in prompts. Trusted tools can receive original PII values for secure processing.
+- ✅ **Signed Audit Trail** - Tamper-proof NDJSON logs with ULID and HMAC chaining.
+- ✅ **Provider-Level Observability** - Granular tracking of tokens, requests, and rate-limits per provider.
+- ✅ **Multi-transport MCP** - Support for HTTP and STDIO (local process) MCP servers.
+- ✅ **Error translation** - Converts cryptic provider errors into actionable messages.
 
 ## Governance & Security
 
-mcp-injector includes a robust governance layer configured via the `:governance` key in `mcp-servers.edn`.
+mcp-injector includes a robust governance layer configured via the `:governance` key in `mcp-servers.edn` (copy from `mcp-servers.example.edn`).
+
+### Governance Modes
+
+- `:permissive` (Default): All tools are allowed unless explicitly denied.
+- `:strict`: All tools are denied unless explicitly allowed in the policy.
+
+### Privileged Tools
+
+Certain high-risk tools (like `clojure-eval`) are marked as **Privileged**. These tools are **always blocked** by default, even in permissive mode, unless explicitly listed in an `:allow` rule.
+
+### Example Policy
+
+```clojure
+:governance
+{:mode :permissive
+ :policy
+ {:mode :permissive  ; Fallback mode for this policy (overrides global)
+  :allow ["mcp__stripe__*"]
+  :deny ["mcp__danger-server__*"]
+  :rules [{:model "gpt-4o-mini" :deny ["clojure-eval"]}]
+  :sampling {:trusted-servers ["stripe" "postgres"]}}
+ :audit
+ {:enabled true :path "logs/audit.log.ndjson"}
+ :pii
+ {:enabled true :mode :replace}}
+```
 
 ### PII Restoration (Smart Vault)
 
-For internal MCP tools that need access to original PII data (e.g., a Stripe integration that must see real email addresses), configure trust levels:
+For tools that need access to original PII data (e.g., a Stripe integration that must see real email addresses), configure trust levels:
 
 ```clojure
 :servers
 {:stripe
  {:url "http://localhost:3001/mcp"
-  :trust :restore  ; :none (default) or :restore
+  :trust :restore  ; :none (default), :read, or :restore
   :tools [{:name "retrieve_customer" :trust :restore}]}}
 ```
 
-### High-Entropy Secret Detection
+- **`:none`** (default): Tool receives redacted tokens like `[EMAIL_ADDRESS_a35e2662]`
+- **`:restore`**: Tool receives original values (e.g., `wes@example.com`)
 
-The PII filter includes a **statistical detection engine** that identifies secrets by their Shannon entropy and character diversity:
-
-- **Entropy Threshold (3.8)**: Filters tokens with Shannon entropy > 3.8 bits per character. This catches high-randomness strings like API keys and tokens while allowing natural language through.
-- **Character Diversity**: Requires at least 4 distinct character classes (lowercase, uppercase, digits, special) OR 3 classes with minimum 30 characters. This prevents false positives on architectural identifiers like file paths or UUIDs.
-- **Minimum Length (13)**: Tokens shorter than 13 characters are ignored to reduce false positives on short strings.
-
-The detection engine uses a **single-pass coordinate-based redaction** algorithm that prevents token overlap corruption. All matches are sorted by position, overlaps resolved (longer matches win), and the document is reconstructed in one pass.
-
-Regex patterns for known secret formats (AWS keys, GitHub tokens, Stripe keys, etc.) are applied first, followed by environment variable value matching, then entropy-based detection.
-
-> **Scaling Note**: For deployments requiring >1000 unique PII tokens per session or massive pattern sets, consider swapping the regex OR-join in `restore-tokens` for an Aho-Corasick trie implementation to maintain O(n) performance regardless of vault size.
-
-```
+ The vault uses deterministic SHA-256 hashing with a per-request salt, ensuring tokens are consistent within a request but not leakable across requests.
 
 ### ⚠️ Security Notice: `clojure-eval` Escape Hatch
 
 The `clojure-eval` tool is a **privileged escape hatch** that allows the LLM to execute arbitrary Clojure code on the host JVM. This is **Remote Code Execution (RCE) by design**.
 
 - **Default State**: Disabled. You must explicitly allow `clojure-eval` in your policy's `:allow` list.
-- **Isolation**: clojure-eval is RCE-by-design; only enable it for fully trusted models in isolated environments.
+- **Risk**: If enabled, a compromised, hallucinating, or prompt-injected LLM gains **full system access**—including files, environment variables, network, and process control.
+- **Mitigation**: Only enable `clojure-eval` for highly trusted models in isolated environments. Treat it as root-level access.
+- **Startup Warning**: When enabled, mcp-injector logs a `CRITICAL` audit event at startup.
 
 ## Quick Start
 
@@ -98,13 +85,53 @@ bb test
 bb run
 ```
 
+## Configuration
+
+Copy the example config and customize:
+
+```bash
+cp mcp-servers.example.edn mcp-servers.edn
+```
+
+Edit `mcp-servers.edn`:
+
+```clojure
+{:servers
+  {:stripe
+   {:url "http://localhost:3001/mcp"
+    :tools ["retrieve_customer" "list_charges"]}}
+ 
+ :llm-gateway
+ {:url "http://localhost:8080"
+  :virtual-models
+  {:brain
+   {:chain ["provider1/model1" "provider2/model2"]
+    :cooldown-minutes 5}}}}
+```
+
 ## Control API
 
 - `GET /api/v1/status`: Health and version.
-- `GET /api/v1/mcp/tools`: List discovered tools in the current lattice.
-- `GET /api/v1/stats`: Usage statistics and provider reliability.
+- `GET /api/v1/mcp/tools`: List discovered tools.
+- `GET /api/v1/stats`: Usage statistics broken down by model and provider.
 - `GET /api/v1/audit/verify`: Cryptographically verify the audit log integrity.
+- `POST /api/v1/mcp/reset`: Clear caches and restart processes.
+
+## NixOS Deployment
+
+```nix
+services.mcp-injector = {
+  enable = true;
+  mcpServers = { ... };
+  governance = {
+    mode = "permissive";
+    policy = {
+      allow = [ "mcp__stripe__*" ];
+    };
+  };
+};
+```
 
 ______________________________________________________________________
 
-**Status**: Production-ready | **Identity**: Minimal Agent Kernel | **Built with**: Babashka + http-kit
+**Status**: Production-ready | **Tests**: 54 passing | **Built with**: Babashka + http-kit + Cheshire

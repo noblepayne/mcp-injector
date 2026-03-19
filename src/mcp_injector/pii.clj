@@ -68,7 +68,7 @@
 
 (defn- character-diversity?
   "Checks if a string contains sufficient character diversity to be considered a secret.
-   Requires at least 4 distinct character classes and minimum length for fewer classes."
+   Requires at least 4 distinct character classes OR at least 3 classes and 20+ chars."
   [s]
   (let [classes [(when (re-find #"[a-z]" s) :lower)
                  (when (re-find #"[A-Z]" s) :upper)
@@ -77,15 +77,55 @@
         num-classes (count (remove nil? classes))]
     (cond
       (>= num-classes 4) true
-      (= num-classes 3) (>= (count s) 30) ; 3 classes needs to be longer
+      (= num-classes 3) (>= (count s) 20)
       :else false)))
+
+(defn- safe-pattern?
+  "Check if token matches known-safe patterns (paths, URLs, IPs, hashes, UUIDs).
+   These patterns should never be flagged as high-entropy secrets."
+  [token]
+  (or
+   (boolean (re-find #"(?i)^[a-z]:[/\\]" token))
+   (boolean
+    (and (re-find #"[/\\]" token)
+         (not (re-find #"[^/\\a-zA-Z0-9._: -]" token))))
+   (re-find #"^https?://" token)
+   (boolean
+    (and (re-find #"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$" token)
+         (not (re-find #"[^0-9.]" token))))
+   (boolean
+    (re-find #"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+$" token))
+   (boolean
+    (and (re-find #":" token)
+         (re-find #"^[0-9a-fA-F:]+$" token)))
+   (boolean
+    (re-find #"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" token))
+   (boolean
+    (re-find #"^\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}$" token))))
+
+(defn- likely-secret-context?
+  "Check if token follows assignment-like patterns.
+   Uses a proximity window before the token to detect assignment syntax."
+  [text start-pos]
+  (let [window-size 30
+        context-start (max 0 (- start-pos window-size))
+        context (subs text context-start start-pos)]
+    (some #(re-find % context)
+          [#"(?i)secret\s*[:=]"
+           #"(?i)api_?key\s*[:=]"
+           #"(?i)token\s*[:=]"
+           #"(?i)password\s*[:=]"
+           #"(?i)credential\s*[:=]"
+           #"(?i)auth(entication)?\s*[:=(]"])))
 
 (defn- find-all-coordinates
   "Scans text for all patterns and return a list of maps containing:
    {:start <int> :end <int> :id <keyword> :value <string> :label <string>}
    
    Pre-compiled env-matches (Patterns) are used to avoid regex thrashing."
-  [text patterns env-patterns-compiled entropy-threshold]
+  [text patterns env-patterns-compiled {:keys [entropy-threshold proximity-check-enabled]
+                                        :or {entropy-threshold 3.8
+                                             proximity-check-enabled true}}]
   (let [;; 1. Pattern matches
         pattern-matches (mapcat (fn [{:keys [id pattern label]}]
                                   (let [matcher (re-matcher pattern text)]
@@ -112,14 +152,28 @@
                             env-patterns-compiled)
         ;; 3. Entropy-based detections
         ;; Scan for density blocks (non-whitespace characters)
+        ;; Guards:
+        ;;   1. NOT a safe pattern (paths, URLs, IPs, hashes, UUIDs)
+        ;;   2. Shannon entropy > threshold
+        ;;   3. Character diversity check (4+ classes or 3 classes + 20+ chars)
+        ;;   4. Proximity context check (assignment keywords nearby) when enabled
         entropy-matches (let [matcher (re-matcher #"[^\s]{13,}" text)]
                           (loop [acc []]
                             (if (.find matcher)
-                              (let [token (.group matcher)]
-                                (if (and (> (shannon-entropy token) entropy-threshold)
-                                         (character-diversity? token))
-                                  (recur (conj acc {:start (.start matcher)
-                                                    :end (.end matcher)
+                              (let [token (.group matcher)
+                                    token-start (.start matcher)
+                                    token-end (.end matcher)
+                                    safe? (safe-pattern? token)
+                                    entropy-ok? (> (shannon-entropy token) entropy-threshold)
+                                    diversity-ok? (character-diversity? token)
+                                    context-ok? (or (not proximity-check-enabled)
+                                                    (likely-secret-context? text token-start))]
+                                (if (and (not safe?)
+                                         entropy-ok?
+                                         diversity-ok?
+                                         context-ok?)
+                                  (recur (conj acc {:start token-start
+                                                    :end token-end
                                                     :id :HIGH_ENTROPY_SECRET
                                                     :value token
                                                     :label "[HIGH_ENTROPY_SECRET]"}))
@@ -170,16 +224,18 @@
 (defn scan-and-redact
   "Scans input text for PII patterns, high-entropy secrets, and env vars.
    Returns {:text redacted-text :detected [label-ids] :matches {label [raw-matches]}}"
-  [text {:keys [patterns entropy-threshold env]
+  [text {:keys [patterns entropy-threshold env proximity-check-enabled]
          :or {patterns default-patterns
               entropy-threshold 3.8
+              proximity-check-enabled true
               env {}}}]
   (let [env-patterns-compiled (compile-env-patterns env)
-        all-coords (find-all-coordinates text patterns env-patterns-compiled entropy-threshold)
+        scan-config {:entropy-threshold entropy-threshold
+                     :proximity-check-enabled proximity-check-enabled}
+        all-coords (find-all-coordinates text patterns env-patterns-compiled scan-config)
         resolved (resolve-coordinates all-coords)
         redacted-text (apply-redactions text resolved)
         detected (distinct (map :id resolved))
-        ;; Build the matches map for backward compatibility
         matches-map (reduce (fn [acc {:keys [id value]}]
                               (update acc id (fnil conj []) value))
                             {}
@@ -205,8 +261,11 @@
     (let [salt (:salt config)
           patterns (or (:patterns config) default-patterns)
           entropy-threshold (or (:entropy-threshold config) 3.8)
+          proximity-check-enabled (or (:proximity-check-enabled config) true)
           env-patterns-compiled (or (:compiled-env config) [])
-          coords (find-all-coordinates v patterns env-patterns-compiled entropy-threshold)
+          scan-config {:entropy-threshold entropy-threshold
+                       :proximity-check-enabled proximity-check-enabled}
+          coords (find-all-coordinates v patterns env-patterns-compiled scan-config)
           resolved (resolve-coordinates coords)]
       (if (empty? resolved)
         [v vault []]
