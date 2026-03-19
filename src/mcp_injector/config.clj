@@ -14,12 +14,48 @@
    :log-level "debug"
    :timeout-ms 1800000
    :eval-timeout-ms 5000
-   :audit-log-path "logs/audit.log.ndjson"
-   :audit-secret "default-audit-secret"})
+   :audit-log-path "logs/audit.log.ndjson"})
+
+;; Minimum secret length: 32 bytes = 256 bits of security
+(def MIN_SECRET_LENGTH 32)
 
 (defn env-var
   ([name] (System/getenv name))
   ([name default] (or (System/getenv name) default)))
+
+(defn generate-secure-random-hex
+  "Generate n bytes of cryptographically secure random data as hex string."
+  [n]
+  (let [bytes (byte-array n)
+        _ (.nextBytes (java.security.SecureRandom.) bytes)]
+    (apply str (map (fn [b] (format "%02x" b)) bytes))))
+
+(defn resolve-secure-secret
+  "Resolve a secret from environment variable or system property, generating a secure random one if missing.
+   Checks both env vars and system properties.
+   Optional logger-fn [level message data context] allows unified logging with core.clj."
+  ([env-name label] (resolve-secure-secret env-name label MIN_SECRET_LENGTH nil))
+  ([env-name label min-len] (resolve-secure-secret env-name label min-len nil))
+  ([env-name label min-len logger-fn]
+   (let [provided (or (System/getenv env-name)
+                      (System/getProperty env-name))]
+     (if (and provided (>= (count provided) min-len))
+       (do
+         (when (and logger-fn
+                    (str/includes? provided "default")
+                    (str/includes? provided "secret"))
+           (logger-fn "warn" "Using default secret - audit logs may be forgeable"
+                      {:secret-type label :env env-name} nil))
+         provided)
+       (let [generated (generate-secure-random-hex 32) ; 32 bytes = 64 hex chars
+             msg (if provided
+                   (format "SECURITY: %s too short (< %d bytes). Generated ephemeral secret." label min-len)
+                   (format "SECURITY: %s not set. Generated ephemeral secret." label))]
+         (when logger-fn
+           (logger-fn "critical" msg
+                      {:secret-type label :ephemeral true :length (if provided (count provided) 0) :env env-name}
+                      nil))
+         generated)))))
 
 (defn- parse-int [s default]
   (try
@@ -71,8 +107,7 @@
           :else default-path))))
 
 (defn load-config []
-  (let [env-audit-path (env-var "MCP_INJECTOR_AUDIT_LOG_PATH")
-        env-audit-secret (env-var "MCP_INJECTOR_AUDIT_SECRET")]
+  (let [env-audit-path (env-var "MCP_INJECTOR_AUDIT_LOG_PATH")]
     {:port (parse-int (env-var "MCP_INJECTOR_PORT") (:port default-config))
      :host (env-var "MCP_INJECTOR_HOST" (:host default-config))
      :llm-url (env-var "MCP_INJECTOR_LLM_URL" (:llm-url default-config))
@@ -81,7 +116,7 @@
      :log-level (env-var "MCP_INJECTOR_LOG_LEVEL" (:log-level default-config))
      :timeout-ms (parse-int (env-var "MCP_INJECTOR_TIMEOUT_MS") (:timeout-ms default-config))
      :audit-log-path (resolve-audit-path env-audit-path)
-     :audit-secret (or env-audit-secret (:audit-secret default-config))
+     :audit-secret (env-var "INJECTOR_AUDIT_SECRET")
      :truncation-limit (parse-int (env-var "MCP_INJECTOR_TRUNCATION_LIMIT") 8192)}))
 
 (defn get-env [name]
@@ -195,8 +230,6 @@
           (= tool-trust :restore) :restore
           (= server-trust :restore) :restore
           :else :none)))))
-
-;; No-op placeholder that gets replaced
 
 (defn get-passthrough-trust
   "Get trust level for a non-prefixed (passthrough) tool.
@@ -368,9 +401,9 @@
      :virtual-models (:virtual-models gateway)
      :audit-log-path (get-in gov [:audit :path])
      :audit-secret (or (get-in gov [:audit :secret])
+                       (env-var "INJECTOR_AUDIT_SECRET")
                        (env-var "MCP_INJECTOR_AUDIT_SECRET")
-                       (:audit-secret env)
-                       "default-audit-secret")
+                       (:audit-secret env))
      :truncation-limit (:truncation-limit env)
      :governance gov}))
 
