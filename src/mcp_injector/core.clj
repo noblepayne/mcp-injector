@@ -267,7 +267,7 @@
 
         :else [{:error (str "Unknown tool: " full-name)} discovered-map]))))
 
-(defn- scrub-messages [messages vault request-id governance]
+(defn- scrub-messages [messages vault pii-salt governance]
   (let [pii-enabled (get-in governance [:pii :enabled] true)]
     (reduce
      (fn [[msgs current-vault] m]
@@ -276,7 +276,7 @@
          (if (and (string? content)
                   (contains? #{"system" "user" "assistant"} role)
                   pii-enabled)
-           (let [config {:mode :replace :salt request-id}
+           (let [config {:mode :replace :salt pii-salt}
                  [redacted-content new-vault _] (pii/redact-data content config current-vault)]
              [(conj msgs (assoc m :content redacted-content)) new-vault])
            [(conj msgs m) current-vault])))
@@ -299,9 +299,9 @@
                    args))
         args))))
 
-(defn- redact-tool-output [raw-output vault request-id governance]
+(defn- redact-tool-output [raw-output vault pii-salt governance]
   (let [pii-enabled (get-in governance [:pii :enabled] true)
-        config {:mode :replace :salt request-id}
+        config {:mode :replace :salt pii-salt}
         parse-json (fn [s] (try (json/parse-string s true) (catch Exception _ nil)))
         parsed (parse-json raw-output)
         [redacted new-vault detected]
@@ -457,7 +457,10 @@
                   _ (storage/append-turn! pii-salt entry)
                   turns-acc (conj turns-acc entry)]
               (if-not (seq tool-calls)
-                (assoc resp :provider model :turns turns-acc)
+                (let [raw-content (:content message)
+                      [scrubbed-content _new_vault] (redact-tool-output raw-content vault-state pii-salt governance)
+                      final-resp (assoc-in resp [:data :choices 0 :message :content] scrubbed-content)]
+                  (assoc final-resp :provider model :turns turns-acc))
                 (let [internal-calls (filter #(internal-call? (get-in % [:function :name])) tool-calls)
                       passthrough-calls (filter #(not (internal-call? (get-in % [:function :name]))) tool-calls)]
                   (if (seq internal-calls)
@@ -565,7 +568,12 @@
            last-error nil
            turns-acc []]
       (if (empty? providers)
-        {:success false :status 502 :error (or last-error {:message "All providers failed"}) :turns turns-acc}
+        (let [final-error (or last-error {:message "All providers failed"})
+              openclaw-error (translate-error-for-openclaw final-error 502)]
+          {:success false
+           :status 502
+           :error (assoc openclaw-error :message "All providers failed")
+           :turns turns-acc})
         (let [provider (first providers)
               _ (log-request "info" "Virtual model: trying provider" {:provider provider :remaining (count (rest providers))}
                              {:model original-model :endpoint llm-url})

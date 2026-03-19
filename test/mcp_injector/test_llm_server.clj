@@ -120,12 +120,19 @@
      :received-requests received-reqs
      :set-response! (fn [response]
                       (swap! responses conj response))
-     :clear-responses! (fn [] (reset! responses []))}))
+     :clear-responses! (fn [] (reset! responses []))
+     :clear-requests! (fn [] (reset! received-reqs []))}))
 
 (defn stop-server
   "Stop the test Bifrost server"
   [{:keys [stop]}]
   (stop))
+
+(defn clear-requests
+  "Clear all received requests"
+  [server]
+  (when-let [clear-fn (:clear-requests! server)]
+    (clear-fn)))
 
 (defn set-next-response
   "Set the next response to be returned by the simulator"
