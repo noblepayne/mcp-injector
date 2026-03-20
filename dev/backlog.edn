@@ -1,17 +1,16 @@
 {:version "1.0"
  :tasks
- [{:id :observability-logging
-   :title "Enhanced observability logging"
-   :description "Add request correlation IDs (ULID), model info, and structured logging for debugging. Every log entry includes request-id, model, and sufficient context to trace errors."
-   :status :in-progress
+ [{:id :observability-action-receipt
+   :title "Action Receipt + Observability Headers"
+   :description "Replace HTML comment footer with clean action receipt (prepended to content) and X-Injector-* response headers. Fixes visible base64 blob regression."
+   :status :planned
    :priority :high
    :phase 1
-   :tags [:observability :logging]
-   :created "2026-03-13"
-   :started "2026-03-13"
+   :tags [:observability]
+   :created "2026-03-20"
    :depends-on []
    :commits []
-   :spec "dev/specs/observability-logging.edn"}
+   :spec "SPEC_MCP_INJECTOR_OBSERVABILITY.md"}
 
   {:id :test-infrastructure
    :title "Build test infrastructure"
