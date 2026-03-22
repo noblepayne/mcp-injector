@@ -50,9 +50,9 @@ Certain high-risk tools (like `clojure-eval`) are marked as **Privileged**. Thes
 
 The PII scanner uses a multi-layered approach to minimize false positives while catching real secrets:
 
-1.  **Whitelisting**: Local file paths (Windows/POSIX), URLs, IP addresses, and UUIDs are automatically ignored.
-2.  **Character Diversity**: Tokens must contain at least 4 character classes (lower, upper, digit, special) OR 3 classes with at least 20 characters. This prevents descriptive strings like `mcp__stripe__retrieve_customer` from being flagged.
-3.  **Proximity Check**: By default, general high-entropy strings are only redacted if they follow assignment-like keywords (e.g., `api_key:`, `token =`). Explicit regex patterns (AWS, Anthropic, etc.) bypass this check for maximum safety.
+1. **Whitelisting**: Local file paths (Windows/POSIX), URLs, IP addresses, and UUIDs are automatically ignored.
+1. **Character Diversity**: Tokens must contain at least 4 character classes (lower, upper, digit, special) OR 3 classes with at least 20 characters. This prevents descriptive strings like `mcp__stripe__retrieve_customer` from being flagged.
+1. **Proximity Check**: By default, general high-entropy strings are only redacted if they follow assignment-like keywords (e.g., `api_key:`, `token =`). Explicit regex patterns (AWS, Anthropic, etc.) bypass this check for maximum safety.
 
 ### PII Restoration (Smart Vault)
 
@@ -69,7 +69,7 @@ For tools that need access to original PII data (e.g., a Stripe integration that
 - **`:none`** (default): Tool receives redacted tokens like `[EMAIL_ADDRESS_a35e2662]`
 - **`:restore`**: Tool receives original values (e.g., `wes@example.com`)
 
- The vault uses deterministic SHA-256 hashing with a per-request salt, ensuring tokens are consistent within a request but not leakable across requests.
+The vault uses deterministic SHA-256 hashing with a per-request salt, ensuring tokens are consistent within a request but not leakable across requests.
 
 ### ⚠️ Security Notice: `clojure-eval` Escape Hatch
 
@@ -79,6 +79,47 @@ The `clojure-eval` tool is a **privileged escape hatch** that allows the LLM to 
 - **Risk**: If enabled, a compromised, hallucinating, or prompt-injected LLM gains **full system access**—including files, environment variables, network, and process control.
 - **Mitigation**: Only enable `clojure-eval` for highly trusted models in isolated environments. Treat it as root-level access.
 - **Startup Warning**: When enabled, mcp-injector logs a `CRITICAL` audit event at startup.
+
+### Observability & Tracing
+
+**Action Receipts** — When tools run during a request, mcp-injector prepends a clean markdown receipt to the response content:
+
+```
+Action Receipt: trace_id=abc123 | 2 tools (165ms total)
+- stripe.get_customer: 45ms
+- postgres.query: ERROR: timeout
+---
+```
+
+Receipts are:
+
+- **Prepended** (not appended) — better for Telegram/Slack UX
+- **PII-masked** — sensitive values replaced with tokens
+- **Controllable** via config/env var
+
+**Response Headers** — Every response includes W3C trace headers for distributed tracing:
+
+```
+X-Injector-Traceparent: 00-<trace-id>-<parent-id>-00
+```
+
+Configure observability:
+
+```clojure
+{:receipt-mode :on}    ;; :on, :off, or :errors-only
+{:receipt-style :emoji} ;; :emoji (future) or :ascii
+{:footer-mode :off}    ;; :off (default) or :legacy
+```
+
+Or via environment variables:
+
+```bash
+MCP_INJECTOR_RECEIPT_MODE=on|off|errors-only
+MCP_INJECTOR_RECEIPT_STYLE=emoji|ascii
+MCP_INJECTOR_FOOTER_MODE=off|legacy
+```
+
+Per-request override: `extra_body: {:receipt false}` suppresses the receipt for that request.
 
 ## Quick Start
 
@@ -107,10 +148,16 @@ cp mcp-servers.example.edn mcp-servers.edn
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `INJECTOR_HMAC_SECRET` | **Required**. 32-byte secret for signing conversation history footers. | (none) |
-| `INJECTOR_DATA_DIR` | Directory for durable session logs. | `.injector/sessions` |
+| `INJECTOR_AUDIT_SECRET` | 32-byte secret for signing audit log entries. | (auto-generated) |
+| `MCP_INJECTOR_AUDIT_LOG_PATH` | Path for NDJSON audit log. | `logs/audit.log.ndjson` |
 | `MCP_INJECTOR_PORT` | Server port. | `8080` |
 | `MCP_INJECTOR_LLM_URL` | LLM gateway endpoint. | `http://localhost:11434` |
+| `MCP_INJECTOR_MAX_ITERATIONS` | Agent loop iteration limit. | `10` |
+| `MCP_INJECTOR_LOG_LEVEL` | Log verbosity. | `debug` |
+| `MCP_INJECTOR_TIMEOUT_MS` | LLM request timeout. | `1800000` |
+| `MCP_INJECTOR_RECEIPT_MODE` | When to show action receipts: `on`, `off`, or `errors-only`. | `on` |
+| `MCP_INJECTOR_RECEIPT_STYLE` | Receipt style: `emoji` or `ascii`. | `emoji` |
+| `MCP_INJECTOR_FOOTER_MODE` | Legacy HTML footer: `off` or `legacy`. | `off` |
 
 Edit `mcp-servers.edn`:
 

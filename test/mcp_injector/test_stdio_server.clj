@@ -14,15 +14,22 @@
           (if line
             (do
               (when (seq (str/trim line))
-                (let [resp (json/parse-string line true)
+                (let [resp (try (json/parse-string line true)
+                                (catch Exception _
+                                  nil))
                       rid (:id resp)]
-                  (if (and rid (get @pending-requests rid))
-                    (do
-                      (async/>!! (get @pending-requests rid) resp)
-                      (swap! pending-requests dissoc rid))
-                    (println "Unexpected response:" resp))))
+                  (when resp
+                    (if (and rid (get @pending-requests rid))
+                      (do
+                        (async/>!! (get @pending-requests rid) resp)
+                        (swap! pending-requests dissoc rid))
+                      (println "Unexpected response:" resp)))))
               (recur))
-            (do (println "Stdio reader: EOF") (reset! running false))))))
+            (reset! running false)))))  ; EOF - silent exit
+    (catch java.io.IOException e
+      ;; Stream closed is expected during shutdown - be silent
+      (when (and @running (not (str/includes? (.getMessage e) "Stream closed")))
+        (println "Stdio reader error:" (.getMessage e))))
     (catch Exception e
       (when @running
         (println "Stdio reader error:" (.getMessage e))))))
@@ -42,16 +49,31 @@
         request-id (atom 0)
         pending-requests (atom {})
         running (atom true)
-        reader-thread (Thread. #(reader-loop in-reader pending-requests running))]
+        reader-thread (doto (Thread. #(reader-loop in-reader pending-requests running))
+                        (.setDaemon true))]
 
     (.start reader-thread)
 
     {:process p
      :thread reader-thread
+     :writer out-writer
+     :reader in-reader
      :running running
      :stop (fn []
              (reset! running false)
-             (process/destroy p))
+
+             ;; Close streams to unblock reader thread
+             (try (.close ^PrintWriter out-writer) (catch Exception _))
+             (try (.close ^BufferedReader in-reader) (catch Exception _))
+
+             ;; Destroy process
+             (process/destroy-tree p)
+
+             ;; Join reader thread with timeout
+             (try
+               (.join ^Thread reader-thread 2000)
+               (catch InterruptedException _ nil)
+               (catch Exception _ nil)))
      :send (fn [method params]
              (let [id (str (swap! request-id inc))
                    req {:jsonrpc "2.0"

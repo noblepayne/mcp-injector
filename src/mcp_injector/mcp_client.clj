@@ -98,31 +98,34 @@
            first)
       (json/parse-string (:body resp) true))))
 
-(defn- call-http [server-url server-config method params]
-  (try
-    (let [sid (get-http-session! server-url server-config)
-          session-header (when sid {"Mcp-Session-Id" sid})
-          resp (http/post server-url
-                          {:headers (build-headers server-config session-header)
-                           :body (json/generate-string
-                                  {:jsonrpc "2.0"
-                                   :id (str (java.util.UUID/randomUUID))
-                                   :method method
-                                   :params params})
-                           :client http-client
-                           :throw false})
-          status (:status resp)
-          body (parse-mcp-body resp)]
-      (cond
-        (= 200 status) body
-        (and sid (#{400 401 404} status))
-        (do (swap! http-sessions dissoc server-url)
-            (call-http server-url server-config method params))
-        :else body))
-    (catch Exception e
-      (let [msg (.getMessage e)]
-        (log-request "debug" "HTTP call failed" {:url server-url :method method :error msg} {:server server-url})
-        {:error msg}))))
+(defn- call-http
+  ([server-url server-config method params]
+   (call-http server-url server-config method params nil))
+  ([server-url server-config method params extra-headers]
+   (try
+     (let [sid (get-http-session! server-url server-config)
+           session-header (when sid {"Mcp-Session-Id" sid})
+           resp (http/post server-url
+                           {:headers (build-headers server-config session-header extra-headers)
+                            :body (json/generate-string
+                                   {:jsonrpc "2.0"
+                                    :id (str (java.util.UUID/randomUUID))
+                                    :method method
+                                    :params params})
+                            :client http-client
+                            :throw false})
+           status (:status resp)
+           body (parse-mcp-body resp)]
+       (cond
+         (= 200 status) body
+         (and sid (#{400 401 404} status))
+         (do (swap! http-sessions dissoc server-url)
+             (call-http server-url server-config method params extra-headers))
+         :else body))
+     (catch Exception e
+       (let [msg (.getMessage e)]
+         (log-request "debug" "HTTP call failed" {:url server-url :method method :error msg} {:server server-url})
+         {:error msg})))))
 
 (defn list-tools
   ([server-id server-config] (list-tools server-id server-config nil))
@@ -138,14 +141,15 @@
        :else []))))
 
 (defn call-tool
-  ([server-id server-config tool-name arguments] (call-tool server-id server-config tool-name arguments nil))
-  ([server-id server-config tool-name arguments policy]
+  ([server-id server-config tool-name arguments] (call-tool server-id server-config tool-name arguments nil nil))
+  ([server-id server-config tool-name arguments policy] (call-tool server-id server-config tool-name arguments policy nil))
+  ([server-id server-config tool-name arguments policy extra-headers]
    (let [url (or (:url server-config)
                  (when (and (string? server-id) (str/starts-with? server-id "http")) server-id))]
      (log-request "info" "Calling Tool" {:tool tool-name} {:server server-id})
      (cond
        (:cmd server-config) (stdio/call-tool server-id server-config tool-name arguments policy)
-       url (let [resp (call-http url server-config "tools/call" {:name tool-name :arguments arguments})]
+       url (let [resp (call-http url server-config "tools/call" {:name tool-name :arguments arguments} extra-headers)]
              (cond
                (:error resp) resp
                (:result resp) (get-in resp [:result :content])

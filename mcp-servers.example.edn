@@ -8,12 +8,17 @@
   {:enabled true :mode :replace :trust :restore}
   :audit
   {:enabled true :path "logs/audit.log.ndjson"}
-  ;; NEW: Trust OpenClaw/passthrough tools (read, edit, exec) for PII restoration
+  ;; Trust OpenClaw/passthrough tools (read, edit, exec) for PII restoration
   :passthrough-trust
   {"read" :restore
    "edit" :restore
    "write" :restore
    "exec" :none}}  ; keep redacted for security
+
+ ;; Observability configuration
+ :receipt-mode :on       ; :on (default), :off, or :errors-only
+ :receipt-style :emoji   ; :emoji (default, future) or :ascii
+ :footer-mode :off       ; :off (default) or :legacy
 
  :servers
  {:auphonic {:url "http://localhost:3003/mcp"

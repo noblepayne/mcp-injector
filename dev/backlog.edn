@@ -3,14 +3,52 @@
  [{:id :observability-action-receipt
    :title "Action Receipt + Observability Headers"
    :description "Replace HTML comment footer with clean action receipt (prepended to content) and X-Injector-* response headers. Fixes visible base64 blob regression."
-   :status :planned
+   :status :done
    :priority :high
    :phase 1
    :tags [:observability]
    :created "2026-03-20"
+   :completed "2026-03-20"
    :depends-on []
    :commits []
-   :spec "SPEC_MCP_INJECTOR_OBSERVABILITY.md"}
+   :spec "dev/archive/SPEC_MCP_INJECTOR_OBSERVABILITY.completed.md"}
+
+  {:id :property-based-testing
+   :title "Add Property-Based Testing (test.check)"
+   :description "Add PBT for PII token roundtrip, receipt parsing, trace header propagation. Use test.check generators to stress edge cases: empty strings, unicode, max-length args, malformed inputs."
+   :status :planned
+   :priority :medium
+   :phase 2
+   :tags [:testing :property-based]
+   :created "2026-03-20"
+   :depends-on [:observability-action-receipt]
+   :spec nil}
+
+  {:id :robustness-test-suite
+   :title "Robustness Test Suite"
+   :description "Projection Integrity (receipt stripping, thinking blocks), STDIO Transport (handshake, death, hang), Concurrency (pmap load, atomic stats), Error Translation Matrix"
+   :status :planned
+   :priority :medium
+   :phase 2
+   :tags [:testing :robustness]
+   :created "2026-03-20"
+   :depends-on [:observability-action-receipt]
+   :spec nil}
+
+  {:id :reasoning-effort-overrides
+   :title "Robust Reasoning Effort & Model Tuning"
+   :description "Implement a multi-level override hierarchy for 'thinking' levels (reasoning_effort). Supports loop-specific tuning (low effort for tool discovery), model-specific pinning (e.g., forcing :low for mimo/tool benchmarks), and cross-provider parameter normalization (OpenAI <-> Anthropic/OpenRouter)."
+   :status :planned
+   :priority :medium
+   :phase 2
+   :tags [:governance :tuning :benchmarking]
+   :created "2026-03-21"
+   :depends-on [:robustness-test-suite]
+   :spec-draft
+   {:hierarchy "Loop Override > Model-Specific Override > Virtual Model Override > Client Request"
+    :features ["Iteration-aware tuning (iteration > 0 uses loop-config)"
+               "Model-to-Parameter mapping (regex-based stripping for gpt-4o compatibility)"
+               "Normalization (reasoning_effort -> output_config.effort)"]}}
 
   {:id :test-infrastructure
    :title "Build test infrastructure"

@@ -14,7 +14,10 @@
    :log-level "debug"
    :timeout-ms 1800000
    :eval-timeout-ms 5000
-   :audit-log-path "logs/audit.log.ndjson"})
+   :audit-log-path "logs/audit.log.ndjson"
+   :receipt-mode :on
+   :receipt-style :emoji
+   :footer-mode :off})
 
 ;; Minimum secret length: 32 bytes = 256 bits of security
 (def MIN_SECRET_LENGTH 32)
@@ -106,6 +109,11 @@
                            :suggestion "Set MCP_INJECTOR_AUDIT_LOG_PATH to an absolute, writable path."}))
           :else default-path))))
 
+(defn- parse-keyword [s default]
+  (if s
+    (keyword s)
+    default))
+
 (defn load-config []
   (let [env-audit-path (env-var "MCP_INJECTOR_AUDIT_LOG_PATH")]
     {:port (parse-int (env-var "MCP_INJECTOR_PORT") (:port default-config))
@@ -117,7 +125,10 @@
      :timeout-ms (parse-int (env-var "MCP_INJECTOR_TIMEOUT_MS") (:timeout-ms default-config))
      :audit-log-path (resolve-audit-path env-audit-path)
      :audit-secret (env-var "INJECTOR_AUDIT_SECRET")
-     :truncation-limit (parse-int (env-var "MCP_INJECTOR_TRUNCATION_LIMIT") 8192)}))
+     :truncation-limit (parse-int (env-var "MCP_INJECTOR_TRUNCATION_LIMIT") 8192)
+     :receipt-mode (parse-keyword (env-var "MCP_INJECTOR_RECEIPT_MODE") (:receipt-mode default-config))
+     :receipt-style (parse-keyword (env-var "MCP_INJECTOR_RECEIPT_STYLE") (:receipt-style default-config))
+     :footer-mode (parse-keyword (env-var "MCP_INJECTOR_FOOTER_MODE") (:footer-mode default-config))}))
 
 (defn get-env [name]
   (System/getenv name))
@@ -405,6 +416,15 @@
                        (env-var "MCP_INJECTOR_AUDIT_SECRET")
                        (:audit-secret env))
      :truncation-limit (:truncation-limit env)
+     :receipt-mode (or (some-> (env-var "MCP_INJECTOR_RECEIPT_MODE") keyword)
+                       (:receipt-mode gateway)
+                       (:receipt-mode env))
+     :receipt-style (or (some-> (env-var "MCP_INJECTOR_RECEIPT_STYLE") keyword)
+                        (:receipt-style gateway)
+                        (:receipt-style env))
+     :footer-mode (or (some-> (env-var "MCP_INJECTOR_FOOTER_MODE") keyword)
+                      (:footer-mode gateway)
+                      (:footer-mode env))
      :governance gov}))
 
 (defn get-llm-url

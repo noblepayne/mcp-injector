@@ -19,6 +19,10 @@
                 (require 'mcp-injector.governance-integration-test)
                 (require 'mcp-injector.passthrough-test)
                 (require 'mcp-injector.schemas-test)
+                (require 'mcp-injector.projection-test)
+                (require 'mcp-injector.stdio-integration-test)
+                (require 'mcp-injector.observability-test)
+                (require 'mcp-injector.stress-test)
                 (let [{:keys [fail error]} (t/run-tests 'mcp-injector.integration-test
                                                         'mcp-injector.discovery-test
                                                         'mcp-injector.mcp-session-test
@@ -31,7 +35,11 @@
                                                         'mcp-injector.restoration-test
                                                         'mcp-injector.governance-integration-test
                                                         'mcp-injector.passthrough-test
-                                                        'mcp-injector.schemas-test)]
+                                                        'mcp-injector.schemas-test
+                                                        'mcp-injector.projection-test
+                                                        'mcp-injector.stdio-integration-test
+                                                        'mcp-injector.observability-test
+                                                        'mcp-injector.stress-test)]
                   (when (pos? (+ fail error))
                     (System/exit 1))))}
 
