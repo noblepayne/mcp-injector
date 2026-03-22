@@ -74,6 +74,8 @@
                    iteration 0}}]
    (let [model (:model chat-req)
          is-o-series (and o-series-compat (o-series? model))
+         ;; Coerce pin-effort to keyword if it comes from Nix/EDN as a string
+         effort-kw (if (string? pin-effort) (keyword pin-effort) pin-effort)
 
          ;; Apply O-series normalizations
          normalized
@@ -107,7 +109,7 @@
              (not is-o-series)
              (assoc :temperature pin-temp)
              :always
-             (assoc :reasoning_effort pin-effort))
+             (assoc :reasoning_effort effort-kw))
            normalized)]
 
      ;; Ensure include_search and plugins are preserved

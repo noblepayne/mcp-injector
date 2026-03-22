@@ -232,6 +232,12 @@
       (is (= [] (:messages res1)) "nil messages should become empty vector")
       (is (= [] (:messages res2)) "empty messages should remain empty vector"))))
 
+(deftest normalize-request-string-effort-coercion-test
+  (testing "Coerces string-based reasoning_effort (from Nix/EDN) to keyword"
+    (let [req {:model "o1" :messages [{:role "user" :content "hi"}]}
+          res (openai/normalize-request req {:loop-pinning true :iteration 1 :pin-effort "medium"})]
+      (is (= :medium (:reasoning_effort res)) "string 'medium' should become keyword :medium"))))
+
 ;; ═══════════════════════════════════════════════════════════════
 ;; Extra field preservation tests
 ;; ═══════════════════════════════════════════════════════════════
