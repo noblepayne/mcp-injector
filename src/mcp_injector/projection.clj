@@ -1,14 +1,28 @@
-(ns mcp-injector.projection)
+(ns mcp-injector.projection
+  (:require [clojure.string :as str]))
 
 ;; --- Projection Functions ---
 
-(defn- truncate-text [text limit]
+(def ^:private receipt-delimiter "\n\n---\n\n")
+
+(defn truncate-text [text limit]
   (if (and limit (> (count text) limit))
     (str (subs text 0 limit)
          "\n[truncated: " (count text) " bytes total, limit " limit "]")
     text))
 
-(defn- project-content-block [block outbound-provider source-provider truncation-limit]
+(defn strip-receipt
+  "Strip action receipt from assistant message content.
+    Pattern: Remove text from start up to and including receipt-delimiter.
+    This prevents 'History Poisoning' where the LLM sees its own tracing metadata."
+  [content]
+  (if (string? content)
+    (if-let [idx (str/index-of content receipt-delimiter)]
+      (subs content (+ idx (count receipt-delimiter)))
+      content)
+    content))
+
+(defn project-content-block [block outbound-provider source-provider truncation-limit]
   (case (:type block)
     "thinking"
     (if (= source-provider outbound-provider)
@@ -21,19 +35,26 @@
       (update-in block [:content 0 :text] #(truncate-text % truncation-limit))
       block)
 
-    ;; Pass-through for text, tool_use, etc.
     block))
 
 (defn project-entry
-  "Transform a WorkLog entry for external use by a specific provider."
+  "Transform a WorkLog entry for external use by a specific provider.
+   Strips receipts from assistant messages to prevent LLM hallucination."
   ([entry outbound-provider]
    (project-entry entry outbound-provider 8192))
   ([entry outbound-provider truncation-limit]
    (let [source-provider (get-in entry [:_meta :provider])
-         content (:content entry)]
+         content (:content entry)
+         role (:role entry)
+         processed-content (mapv (fn [block]
+                                   (if (and (= role "assistant") (= (:type block) "text"))
+                                     (update block :text strip-receipt)
+                                     block))
+                                 content)]
      (-> entry
          (dissoc :_meta)
-         (assoc :content (mapv #(project-content-block % outbound-provider source-provider truncation-limit) content))))))
+         (assoc :content (mapv #(project-content-block % outbound-provider source-provider truncation-limit)
+                               processed-content))))))
 
 (defn project-work-log
   "Project an entire WorkLog vector for an outbound provider."

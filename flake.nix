@@ -80,7 +80,7 @@
             # Dev-only secret for tests. DO NOT use in production.
             export INJECTOR_HMAC_SECRET="dev-mode-secret-do-not-use-in-production-at-least-32-chars"
 
-            export SHELL=$OLDSHELL
+	    export SHELL=''${OLDSHELL:-$SHELL}
           '';
         };
 
