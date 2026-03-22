@@ -54,6 +54,17 @@
                "Iteration-aware loop pinning (temperature, reasoning_effort)"
                "Governance config: :o-series-compat, :loop-pinning, :model-tuning"]}}
 
+  {:id :no-tool-name-masking
+   :title "Audit tool name preservation through the injection pipeline"
+   :description "Ensure mcp-injector never masks, renames, or loses original MCP tool names (or skill names) at any point in the pipeline: discovery, injection, tool call routing, receipt generation, or work log. The mcp__server__tool prefix must be consistently reversible and the original tool name always recoverable for logging, policy, and debugging."
+   :status :planned
+   :priority :high
+   :phase 2
+   :tags [:correctness :tools :governance :debugging]
+   :created "2026-03-22"
+   :depends-on [:reasoning-effort-overrides]
+   :spec nil}
+
   {:id :test-infrastructure
    :title "Build test infrastructure"
    :description "Create real HTTP test servers (MCP and Bifrost simulators) for integration testing"
