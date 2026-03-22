@@ -53,28 +53,36 @@
           (if line
             (do
               (when (seq (str/trim line))
-                (let [msg (json/parse-string line true)
+                (let [msg (try (json/parse-string line true)
+                               (catch Exception _
+                                 (log-request "warn" "Failed to parse JSON-RPC line" {:server server-id :line line})
+                                 nil))
                       id (:id msg)
                       method (:method msg)]
-                  (cond
-                    ;; 1. It's a Response to a client request
-                    (and id (or (contains? msg :result) (contains? msg :error)))
-                    (when-let [resp-ch (get @pending-requests id)]
-                      (async/>!! resp-ch msg)
-                      (swap! pending-requests dissoc id))
+                  (when msg
+                    (cond
+                      ;; 1. It's a Response to a client request
+                      (and id (or (contains? msg :result) (contains? msg :error)))
+                      (when-let [resp-ch (get @pending-requests id)]
+                        (async/>!! resp-ch msg)
+                        (swap! pending-requests dissoc id))
 
-                    ;; 2. It's an Inbound Request from the server
-                    (and id method)
-                    (handle-inbound-request server-id msg writer policy)
+                      ;; 2. It's an Inbound Request from the server
+                      (and id method)
+                      (handle-inbound-request server-id msg writer policy)
 
-                    ;; 3. It's an Inbound Notification
-                    method
-                    (log-request "debug" "Server notification received" {:server server-id :method method})
+                      ;; 3. It's an Inbound Notification
+                      method
+                      (log-request "debug" "Server notification received" {:server server-id :method method})
 
-                    :else
-                    (log-request "warn" "Malformed JSON-RPC message" {:server server-id :msg msg}))))
+                      :else
+                      (log-request "warn" "Malformed JSON-RPC message" {:server server-id :msg msg})))))
               (recur))
-            (reset! running false)))))
+            (reset! running false)))))  ; EOF - silent exit
+    (catch java.io.IOException e
+      ;; Stream closed is expected during shutdown - be silent
+      (when (and @running (not (str/includes? (.getMessage e) "Stream closed")))
+        (log-request "error" "MCP Stdio Reader error" {:server server-id :error (.getMessage e)})))
     (catch Exception e
       (when @running
         (log-request "error" "MCP Stdio Reader error" {:server server-id :error (.getMessage e)})))))
@@ -83,20 +91,43 @@
   (let [p (process/process
            cmd
            (merge
-            {:in :pipe :out :pipe :err :inherit}
+            {:in :pipe :out :pipe :err :pipe}
             (when env {:env (into {} (map (fn [[k v]] [(name k) (str v)]) env))})
             (when cwd {:dir (str cwd)})))
         out-writer (PrintWriter. (OutputStreamWriter. (:in p)) true)
         in-reader (BufferedReader. (InputStreamReader. (:out p)))
+        err-reader (BufferedReader. (InputStreamReader. (:err p)))
         pending-requests (atom {})
         running (atom true)
-        reader-thread (Thread. #(reader-loop server-id in-reader out-writer pending-requests running policy))]
+        ;; Drain stderr to prevent blocking
+        stderr-drain-thread (doto (Thread. #(let [reader err-reader]
+                                              (while @running
+                                                (try
+                                                  (let [line (.readLine reader)]
+                                                    (if line
+                                                      (when (seq (str/trim line))
+                                                        (log-request "debug" "STDIO stderr" {:server server-id :line line}))
+                                                      (reset! running false)))  ; EOF - exit loop
+                                                  (catch java.io.IOException e
+                                                    ;; Stream closed is expected during shutdown - be silent
+                                                    (when (and @running (not (str/includes? (.getMessage e) "Stream closed")))
+                                                      (log-request "error" "STDIO drain error" {:server server-id :error (.getMessage e)})))
+                                                  (catch Exception e
+                                                    (when @running
+                                                      (log-request "error" "STDIO drain error" {:server server-id :error (.getMessage e)})))))))
+                              (.setDaemon true))
+        reader-thread (doto (Thread. #(reader-loop server-id in-reader out-writer pending-requests running policy))
+                        (.setDaemon true))]
+    (.start stderr-drain-thread)
     (.start reader-thread)
     {:process p
      :writer out-writer
+     :reader in-reader
+     :err-reader err-reader
      :pending pending-requests
      :running running
-     :request-id (atom 0)}))
+     :request-id (atom 0)
+     :threads [stderr-drain-thread reader-thread]}))
 
 (defn- send-request [session method params]
   (let [id (str (swap! (:request-id session) inc))
@@ -107,7 +138,7 @@
         resp-ch (async/chan 1)]
     (swap! (:pending session) assoc id resp-ch)
     (.println ^PrintWriter (:writer session) (json/generate-string req))
-    (let [[resp _] (async/alts!! [resp-ch (async/timeout 30000)])]
+    (let [[resp _] (async/alts!! [resp-ch (async/timeout 5000)])]
       (swap! (:pending session) dissoc id)
       (if (nil? resp)
         {:error "Request timed out"}
@@ -143,7 +174,7 @@
       session
       (let [resp (send-request session "tools/list" {})]
         (if-let [tools (get-in resp [:result :tools])]
-          tools
+          (mapv (fn [t] (update t :name #(some-> % name))) tools)
           (or (:error resp) []))))))
 
 (defn call-tool [server-id server-config tool-name arguments policy]
@@ -160,12 +191,30 @@
 (defn stop-all []
   (doseq [[_id session] @sessions]
     (reset! (:running session) false)
-    (process/destroy (:process session)))
+
+    ;; Close streams to unblock reader threads
+    (when-let [writer (:writer session)]
+      (try (.close ^PrintWriter writer) (catch Exception _)))
+    (when-let [reader (:reader session)]
+      (try (.close ^BufferedReader reader) (catch Exception _)))
+    (when-let [err-reader (:err-reader session)]
+      (try (.close ^BufferedReader err-reader) (catch Exception _)))
+
+    ;; Destroy process
+    (process/destroy-tree (:process session))
+
+    ;; Join threads with timeout
+    (doseq [thread (:threads session)]
+      (when thread
+        (try
+          (.join ^Thread thread 2000)  ; Wait up to 2 seconds
+          (catch InterruptedException _ nil)
+          (catch Exception _ nil)))))
   (reset! sessions {}))
 
 (defn get-active-sessions []
   (into {} (map (fn [[id session]]
-                  [id {:pid (:pid @(:process session))
+                  [id {:pid (:pid (:process session))
                        :running @(:running session)
                        :pending-count (count @(:pending session))}])
                 @sessions)))

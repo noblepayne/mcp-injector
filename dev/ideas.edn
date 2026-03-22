@@ -1,0 +1,95 @@
+{:version "1.0"
+ :ideas [ ;; ═══════════════════════════════════════════════════════════════
+ ;; LONGER-TERM / RESEARCH
+ ;; ═══════════════════════════════════════════════════════════════
+
+         {:id :async-session-wakeup
+          :title "Async MCP Task Session Wake-up"
+          :description "Injector tracks background tasks; when a task completes, it 'wakes up' the next turn in the same session with the result, avoiding external webhooks."
+          :status :exploring
+          :created "2026-03-20"
+          :complexity :medium
+          :value :high
+          :notes ["Requires session-id persistence (already in storage.clj)"
+                  "Need a 'pending-results' queue per session"
+                  "Flow: User triggers async op → continues chatting → op completes → injector buffers result → next user turn → injector injects context: 'Your earlier request finished: <result>'"]}
+
+         {:id :acp-remote-hands
+          :title "ACP Tool Registration & Remote Hands"
+          :description "Present ACP endpoints (Remote VPS, other agents) as native tools. Allow the bot to 'register' new ACP hosts and control them like local avatars. Yap could itself be an ACP endpoint."
+          :status :exploring
+          :created "2026-03-20"
+          :complexity :high
+          :value :high
+          :notes ["Aligns with LF A2A / OpenClaw ACP standards"
+                  "Remote Hands tool: bot can 'ask for help' or 'delegate to human'"
+                  "ACP Registration: bot registers new endpoints as injectable tools"
+                  "Reference: GongRzhe/ACP-MCP-Server for bridge patterns"]}
+
+         {:id :context-awareness-engine
+          :title "Context Awareness Engine (503 → Compaction)"
+          :description "When virtual model chain hits 503 (context overflow), instead of advancing to next provider (same context window), invoke a lightweight compactor model, then retry original provider."
+          :status :exploring
+          :created "2026-03-20"
+          :complexity :high
+          :value :medium
+          :notes ["Proposed in TODO.md with partial spec"
+                  "Alternative: let upstream agents (OpenClaw) handle compaction via session reset"
+                  "Worth revisiting when we have operator feedback on context overflow rates"]}
+
+ ;; ═══════════════════════════════════════════════════════════════
+ ;; INTERESTING / WORTH EVALUATING
+ ;; ═══════════════════════════════════════════════════════════════
+
+         {:id :injector-push-mode
+          :title "Native Injector Push Mode"
+          :description "Move the 'meta-turn' logic (keep-working/done tools) from yap into the injector core. Ensure agents don't get lazy/stop prematurely. Injector-level heartbeat to detect lazy LLM transitions and force re-prompt."
+          :status :interested
+          :created "2026-03-20"
+          :complexity :low
+          :value :medium
+          :notes ["Makes push-mode available to any client (not just yap)"
+                  "Useful for long-running research loops"
+                  "Could add X-Injector-Meta-Turns header to track pushes"]}
+
+         {:id :mcp-search-list-tools
+          :title "Native Tool Discovery Tools"
+          :description "Expose list_mcp_tools and search_mcp_tools as native tools to the agent, reducing initial prompt bloat. Agent calls them first → narrows → then get_tool_schema."
+          :status :interested
+          :created "2026-03-20"
+          :complexity :low
+          :value :high
+          :notes ["Already in TODO.md inbox"
+                  "Also consider: auto-schema on first call (skip explicit get_tool_schema)"]}
+
+         {:id :streaming-tool-results
+          :title "Stream Tool Results During Execution"
+          :description "Instead of buffering all tool results until the loop completes, stream them back as each tool finishes. Provides real-time progress feedback during long agent loops."
+          :status :interested
+          :created "2026-03-20"
+          :complexity :medium
+          :value :medium
+          :notes ["Would require non-blocking SSE sending from agent-loop"
+                  "Verify operators want this before building (YAGNI)"]}
+
+ ;; ═══════════════════════════════════════════════════════════════
+ ;; BACKLOG ITEMS (from TODO.md inbox)
+ ;; ═══════════════════════════════════════════════════════════════
+
+         {:id :better-tunes
+          :title "TUNE: Reduce 'high entropy secret' noise"
+          :description "Tools often show 'high entropy secret' for tool names and param hints. Tune the PII scanner to be less noisy on known-safe patterns."
+          :status :not-now
+          :created "2026-03-20"
+          :complexity :low
+          :value :low
+          :notes ["Nice-to-have polishing item"]}
+
+         {:id :better-params-hints
+          :title "Improve param hints formatting"
+          :description "Current param hints ([id, limit?]) are nice; could evolve to short JSON examples if models respond better."
+          :status :not-now
+          :created "2026-03-20"
+          :complexity :low
+          :value :low
+          :notes ["Requires testing with model behavior"]}]}

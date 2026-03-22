@@ -36,8 +36,8 @@
       (= method "tools/list")
       {:jsonrpc "2.0"
        :id id
-       :result {:tools (mapv (fn [[name spec]]
-                               {:name (name name)
+       :result {:tools (mapv (fn [[t-name spec]]
+                               {:name (name t-name)
                                 :description (:description spec)
                                 :inputSchema (:inputSchema spec)})
                              tools)}}

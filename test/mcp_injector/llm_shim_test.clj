@@ -219,6 +219,29 @@
       ;; For now just verify it doesn't hang forever
       (is (contains? #{200 429 502 503 504} (:status response))))))
 
+(deftest test-context-overflow-mapping
+  (testing "500 'context window exceeded' is mapped to 503 'context_overflow'"
+    (let [{:keys [injector llm]} @test-state
+          port (:port injector)
+
+          ;; Bifrost returns 500 with "context window exceeded"
+          _ (test-llm/set-error-response llm 500 "context window exceeded")
+
+          request {:model "deepseek/deepseek-chat"
+                   :messages [{:role "user" :content "Too long..."}]
+                   :stream false}
+
+          response @(http/post (str "http://localhost:" port "/v1/chat/completions")
+                               {:body (json/generate-string request)
+                                :headers {"Content-Type" "application/json"}})]
+
+      ;; Should get 503 status
+      (is (= 503 (:status response)))
+
+      ;; Body should contain context_overflow type
+      (let [body (json/parse-string (body->string (:body response)) true)]
+        (is (= "context_overflow" (get-in body [:error :type])))))))
+
 (deftest test-mcp-tool-execution
   (testing "MCP tools (server.tool format) are executed by shim"
     ;; This requires MCP config - test will be added when we have MCP servers

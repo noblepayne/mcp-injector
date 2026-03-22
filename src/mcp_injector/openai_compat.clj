@@ -1,43 +1,8 @@
 (ns mcp-injector.openai-compat
   "OpenAI API compatibility layer and SSE streaming."
   (:require [cheshire.core :as json]
-            [mcp-injector.config :as config])
-  (:import (javax.crypto Mac)
-           (javax.crypto.spec SecretKeySpec)
-           (java.util Base64)))
-
-(defn hmac-sha256 [secret data-str]
-  (let [mac (Mac/getInstance "HmacSHA256")
-        key-spec (SecretKeySpec. (.getBytes secret "UTF-8") "HmacSHA256")]
-    (.init mac key-spec)
-    (->> (.doFinal mac (.getBytes data-str "UTF-8"))
-         (map #(format "%02x" (Byte/toUnsignedInt %)))
-         (apply str))))
-
-(defn build-footer
-  "Build the signed HTML-comment footer for a completed agent loop.
-   Ensures deterministic JSON serialization for consistent signatures.
-   Returns unsigned footer if secret-key is nil or too short."
-  [projected-turns session-id secret-key]
-  (let [payload {:source "mcp-injector"
-                 :v 1
-                 :session_id session-id
-                 :turns projected-turns}
-        payload-str (json/generate-string (into (sorted-map) payload))
-        can-sign? (and secret-key (>= (count secret-key) config/MIN_SECRET_LENGTH))]
-    (if can-sign?
-      (let [hmac (hmac-sha256 secret-key payload-str)
-            envelope {:hmac hmac :data payload-str}
-            envelope-str (json/generate-string (into (sorted-map) envelope))
-            b64 (.encodeToString
-                 (Base64/getEncoder)
-                 (.getBytes envelope-str "UTF-8"))]
-        (str "\n\n<!-- x-injector-v1\n" b64 "\n-->"))
-      (let [warning-msg (format "UNSIGNED: HMAC signature missing or < %d bytes. Session: %s, Turns: %d"
-                                config/MIN_SECRET_LENGTH
-                                session-id
-                                (count projected-turns))]
-        (str "\n\n<!-- x-injector-v1\n" warning-msg "\n-->")))))
+            [clojure.string :as str]
+            [mcp-injector.pii :as pii]))
 
 (defn parse-chat-request
   "Parse incoming OpenAI chat completion request"
@@ -136,3 +101,180 @@
              "Cache-Control" "no-cache"
              "Connection" "keep-alive"}
    :body (build-chat-response-streaming response-data)})
+
+(defn generate-trace-id
+  "Generate a W3C-compliant 32-hex-character trace ID.
+   Uses 16 hex chars of timestamp + 16 hex chars of random for consistency."
+  []
+  (let [timestamp (format "%016x" (quot (System/currentTimeMillis) 1000))
+        random-part (let [sb (StringBuilder.)]
+                      (doseq [_ (range 16)]
+                        (.append sb (format "%01x" (rand-int 16))))
+                      (str sb))]
+    (str timestamp random-part)))
+
+(defn parse-traceparent
+  "Parse W3C traceparent header value.
+   Format: version-trace_id-parent_id-flags
+   Returns {:version :trace-id :parent-id :flags} or nil if invalid."
+  [traceparent]
+  (when (string? traceparent)
+    (let [parts (str/split traceparent #"-")]
+      (when (= 4 (count parts))
+        (let [[version trace-id parent-id flags] parts]
+          (when (and (= 2 (count version))
+                     (= 32 (count trace-id))
+                     (= 16 (count parent-id))
+                     (= 2 (count flags)))
+            {:version version
+             :trace-id trace-id
+             :parent-id parent-id
+             :flags flags}))))))
+
+(defn build-traceparent
+  "Build W3C traceparent header value.
+   version: 2 hex chars (00 = spec version)
+   trace-id: 32 hex chars
+   parent-id: 16 hex chars
+   flags: 2 hex chars (00 = no flags, 01 = sampled)"
+  [trace-id parent-id]
+  (str "00-" trace-id "-" parent-id "-00"))
+
+(defn build-trace-headers
+  "Generate W3C traceparent headers for distributed tracing.
+   If incoming-headers contains traceparent, propagate it.
+   Otherwise generate new trace context.
+   Returns map of headers to add to requests."
+  ([]
+   (build-trace-headers nil))
+  ([incoming-headers]
+   (let [existing (some->> (or (get incoming-headers "traceparent")
+                               (get incoming-headers "Traceparent"))
+                           parse-traceparent)
+         trace-id (or (:trace-id existing) (generate-trace-id))
+         parent-id (format "%016x" (rand-int Integer/MAX_VALUE))
+         traceparent (build-traceparent trace-id parent-id)]
+     {"traceparent" traceparent})))
+
+(defn build-response-headers
+  "Build X-Injector-* and Server-Timing response headers.
+   Safe to call with nil — always returns at least version header.
+   
+   Options:
+   - :session-id - for X-Injector-Session
+   - :turns - number of LLM turns
+   - :tools-called - vector of tool names called
+   - :ms - total wall time in ms (can be fractional for precision)
+   - :trace-id - for X-Injector-Traceparent
+   - :parent-id - for X-Injector-Traceparent
+   
+   Returns map of header-name -> header-value."
+  [{:keys [session-id turns tools-called ms trace-id parent-id]
+    :or {ms 0}}]
+  (let [headers {"X-Injector-Version" "1"}]
+    (cond-> headers
+      session-id
+      (assoc "X-Injector-Session" (str session-id))
+
+      (some? turns)
+      (assoc "X-Injector-Turns" (str turns))
+
+      (seq tools-called)
+      (assoc "X-Injector-Tools"
+             (let [s (str/join "," tools-called)]
+               (if (> (count s) 2000)
+                 (str (subs s 0 1997) "...")
+                 s)))
+
+      (some? ms)
+      (merge {"X-Injector-Ms" (str ms)
+              "Server-Timing" (str "total;dur=" (format "%.2f" ms))})
+
+      (and trace-id parent-id)
+      (assoc "X-Injector-Traceparent" (build-traceparent trace-id parent-id)))))
+
+(defn redact-for-receipt
+  "Redact PII from tool arguments for safe inclusion in receipts.
+   Uses the PII scanner redact-data with request-scoped vault.
+   Returns [redacted-args vault detected]."
+  [args pii-config vault]
+  (if (map? args)
+    (pii/redact-data args pii-config vault)
+    [args vault []]))
+
+(defn format-tool-entry
+  "Format a single tool execution for the receipt.
+  Returns [tool-name args-display ms error-msg status] or nil if should be excluded.
+  Args-display is the formatted args string (truncated if needed).
+  Status is :ok or :error."
+  [{:keys [name args ms status error]}]
+  (when (and name (not= status :skipped))
+    (let [;; Redact PII from args before formatting
+          [redacted-args _ _] (if args
+                                (redact-for-receipt args {:patterns mcp-injector.pii/default-patterns} {})
+                                [nil {} []])
+          args-str (when redacted-args
+                     (let [s (if (string? redacted-args) redacted-args (json/generate-string redacted-args))]
+                       (if (> (count s) 60)
+                         (str (subs s 0 60) "…")
+                         s)))
+          args-display (or args-str "{}")
+          ms-str (if ms (str ms "ms") "?")
+          entry [name args-display ms-str error status]]
+      (with-meta entry {:status status}))))
+
+(defn build-receipt
+  "Build prepended action receipt for agent execution.
+     
+   Takes a worklog vector of tool execution maps:
+   - {:name stripe.get_customer :args {:id cus_123} :ms 45 :status :ok}
+   - {:name postgres.query :args {:sql SELECT *} :ms 120 :status :error :error timeout}
+   
+   Options map:
+   - :trace-id - trace ID to include in receipt header (required for idempotency)
+   - :receipt-mode - :on (default, always show when tools ran), :off (never show), :errors-only (show only if errors)
+   - :receipt-style - :emoji (use ✓/✗ symbols) or :ascii (text labels)
+   
+   Returns prepended receipt string or nil if no receipt should be shown.
+   
+   Format (emoji style):
+   🔧 2 tool calls · 165ms
+   
+   `stripe.get_customer` {\"customer_id\": \"cus_123\"} ✓ 45ms
+   `postgres.query` {\"sql\": \"SELECT * ...\"} ✗ 120ms — timeout
+   
+   ---
+   "
+  ([worklog]
+   (build-receipt worklog {}))
+  ([worklog {:keys [trace-id receipt-mode receipt-style]
+             :or {receipt-mode :on receipt-style :ascii}}]
+   (let [_trace-id (or trace-id (generate-trace-id))
+         raw-entries (->> worklog
+                          (keep format-tool-entry)
+                          seq)
+         entries (case receipt-mode
+                   :off nil
+                   :errors-only (when (some #(= :error (-> % meta :status)) raw-entries)
+                                  raw-entries)
+                   :on raw-entries
+                   raw-entries)
+         emoji? (= receipt-style :emoji)
+         check (if emoji? "✓" "OK")
+         cross (if emoji? "✗" "ERR")
+         wrench (if emoji? "🔧 " "[TOOLS] ")]
+     (when entries
+       (let [total-ms (apply + (map :ms worklog))
+             total-ms-str (str total-ms "ms")
+             tool-count (count entries)
+             header (str wrench tool-count " tool call" (when (> tool-count 1) "s")
+                         (when total-ms (str " · " total-ms-str))
+                         "\n\n")
+             lines (mapv (fn [[name args-display ms-str error status]]
+                           (let [suffix (if (= status :ok)
+                                          (str check " " ms-str)
+                                          (str cross " " ms-str " — " error))]
+                             (str "`" name "` " args-display " " suffix)))
+                         entries)
+             content (str/join (str \newline) lines)]
+         (str header content "\n\n---\n\n"))))))
