@@ -38,12 +38,13 @@
   {:id :reasoning-effort-overrides
    :title "Robust Reasoning Effort & Model Tuning"
    :description "Implement O-series schema normalization (system->developer, max_tokens->max_completion_tokens) and universal loop pinning (temperature/effort during tool iterations)."
-   :status :in_progress
+   :status :done
    :priority :high
    :phase 2
    :tags [:governance :tuning :benchmarking :openai-compat]
    :created "2026-03-21"
    :started "2026-03-22"
+   :completed "2026-03-22"
    :depends-on [:observability-action-receipt]
    :spec-draft
    {:hierarchy "Loop Override > Model-Specific Override > Virtual Model Override > Client Request"
