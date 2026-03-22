@@ -72,6 +72,19 @@
           :notes ["Would require non-blocking SSE sending from agent-loop"
                   "Verify operators want this before building (YAGNI)"]}
 
+         {:id :context-aware-mcp-activation
+          :title "Context-Aware MCP Activation"
+          :description "The injector scans user messages for intent (e.g., 'search', 'look up', 'news') and conditionally activates specific MCP tools or passes through search flags (include_search, plugins). Supports both native provider search and local searxng MCP tools."
+          :status :exploring
+          :created "2026-03-22"
+          :complexity :medium
+          :value :high
+          :notes ["Replaces 'Search Intent Detector' idea that was dropped for transparency reasons"
+                  "Should be opt-in via governance config (not default behavior)"
+                  "Could also activate tools based on model profile (e.g., if model is 'reasoning-heavy', pin temperature automatically)"
+                  "Potential concern: English-centric, might be fragile"
+                  "Alternative: Just pass through search fields and let client decide"]}
+
  ;; ═══════════════════════════════════════════════════════════════
  ;; BACKLOG ITEMS (from TODO.md inbox)
  ;; ═══════════════════════════════════════════════════════════════

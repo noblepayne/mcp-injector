@@ -14,6 +14,87 @@
      :temperature (:temperature parsed)
      :max-tokens (:max_tokens parsed)}))
 
+;; ═══════════════════════════════════════════════════════════════
+;; Stage 7: O-Series Reasoning Model Normalization
+;; ═══════════════════════════════════════════════════════════════
+
+(defn o-series?
+  "Check if model is an OpenAI O-series reasoning model.
+   Matches: o1, o3, o- prefixed models (o1-mini, o3-2025-04-16, etc.)"
+  [model]
+  (when model
+    (let [model-str (str model)]
+      (or (str/starts-with? model-str "o1")
+          (str/starts-with? model-str "o3")
+          (str/starts-with? model-str "o-")))))
+
+(defn o1-preview?
+  "Specifically check for o1-preview models that reject more params."
+  [model]
+  (when model
+    (let [model-str (str model)]
+      (str/starts-with? model-str "o1-preview"))))
+
+(defn normalize-request
+  "Normalize an OpenAI-compatible request for the target model.
+   Handles O-series schema changes (developer role, max_completion_tokens).
+   Preserves fields like include_search and plugins for upstream providers.
+   
+   Options:
+   - :o-series-compat - enable O-series normalization (default: true)
+   - :loop-pinning - enable loop-specific overrides (default: false)
+   - :pin-temp - temperature to use during loop turns
+   - :pin-effort - reasoning_effort to use during loop turns
+   - :iteration - current iteration number (for loop pinning)"
+  ([chat-req]
+   (normalize-request chat-req {}))
+  ([chat-req {:keys [o-series-compat loop-pinning pin-temp pin-effort iteration]
+              :or {o-series-compat true
+                   loop-pinning false
+                   pin-temp 0.1
+                   pin-effort :low
+                   iteration 0}}]
+   (let [model (:model chat-req)
+         is-o-series (and o-series-compat (o-series? model))
+         is-o1-preview (and o-series-compat (o1-preview? model))
+
+         ;; Apply O-series normalizations
+         normalized
+         (if is-o-series
+           (-> chat-req
+               ;; Rename system role to developer
+               (update :messages
+                       (fn [messages]
+                         (mapv (fn [msg]
+                                 (if (= "system" (:role msg))
+                                   (assoc msg :role "developer")
+                                   msg))
+                               messages)))
+               ;; Rename max_tokens to max_completion_tokens (only if not already present)
+               (cond-> (and (:max_tokens chat-req)
+                            (not (contains? chat-req :max_completion_tokens)))
+                 (assoc :max_completion_tokens (:max_tokens chat-req)))
+               (dissoc :max_tokens)
+               ;; Strip unsupported params for o1-preview
+               (cond-> is-o1-preview
+                 (dissoc :temperature :top_p :frequency_penalty
+                         :presence_penalty :n :best_of :logprobs
+                         :top_logprobs :logit_bias :stop)))
+           chat-req)
+
+         ;; Apply loop pinning if enabled and not final iteration
+         pinned
+         (if (and loop-pinning (> iteration 0))
+           (-> normalized
+               (assoc :temperature pin-temp)
+               (assoc :reasoning_effort pin-effort))
+           normalized)]
+
+     ;; Ensure include_search and plugins are preserved
+     pinned)))
+
+;; ═══════════════════════════════════════════════════════════════
+
 (defn- sse-event
   "Format data as SSE event"
   [data]

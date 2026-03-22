@@ -456,7 +456,13 @@
                                      :tool_calls nil}
                            :finish_reason "length"}]}}
         (let [_ (log-request "info" "Tool Loop" {:iteration iteration :calls (count (get-in current-payload [:messages]))} context)
-              resp (call-llm llm-url current-payload trace-ctx)]
+              ;; Apply O-series normalization and loop pinning
+              normalized-payload (openai/normalize-request
+                                  current-payload
+                                  (merge
+                                   {:iteration iteration}
+                                   (select-keys governance [:o-series-compat :loop-pinning :pin-temp :pin-effort])))
+              resp (call-llm llm-url normalized-payload trace-ctx)]
           (if-not (:success resp)
             (assoc resp :turns turns-acc :work-log work-log)
             (let [choices (get-in resp [:data :choices])

@@ -37,18 +37,21 @@
 
   {:id :reasoning-effort-overrides
    :title "Robust Reasoning Effort & Model Tuning"
-   :description "Implement a multi-level override hierarchy for 'thinking' levels (reasoning_effort). Supports loop-specific tuning (low effort for tool discovery), model-specific pinning (e.g., forcing :low for mimo/tool benchmarks), and cross-provider parameter normalization (OpenAI <-> Anthropic/OpenRouter)."
-   :status :planned
-   :priority :medium
+   :description "Implement O-series schema normalization (system->developer, max_tokens->max_completion_tokens) and universal loop pinning (temperature/effort during tool iterations)."
+   :status :in_progress
+   :priority :high
    :phase 2
-   :tags [:governance :tuning :benchmarking]
+   :tags [:governance :tuning :benchmarking :openai-compat]
    :created "2026-03-21"
-   :depends-on [:robustness-test-suite]
+   :started "2026-03-22"
+   :depends-on [:observability-action-receipt]
    :spec-draft
    {:hierarchy "Loop Override > Model-Specific Override > Virtual Model Override > Client Request"
-    :features ["Iteration-aware tuning (iteration > 0 uses loop-config)"
-               "Model-to-Parameter mapping (regex-based stripping for gpt-4o compatibility)"
-               "Normalization (reasoning_effort -> output_config.effort)"]}}
+    :features ["O-series predicate and normalize-request middleware"
+               "System->developer role mapping for o1/o3"
+               "max_tokens->max_completion_tokens aliasing"
+               "Iteration-aware loop pinning (temperature, reasoning_effort)"
+               "Governance config: :o-series-compat, :loop-pinning, :model-tuning"]}}
 
   {:id :test-infrastructure
    :title "Build test infrastructure"
