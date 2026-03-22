@@ -358,7 +358,11 @@
                   :pii {:enabled true :mode :replace :trust :restore}
                   :audit {:enabled true :path (:audit-log-path env-config)}
                   :policy {:mode :permissive}
-                  :passthrough-trust :restore-all}]
+                  :passthrough-trust :restore-all
+                  :o-series-compat true
+                  :loop-pinning false
+                  :pin-temp 0.1
+                  :pin-effort :low}]
     (deep-merge defaults gov-user)))
 
 (defn extract-governance

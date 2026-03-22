@@ -18,34 +18,47 @@
 ;; Stage 7: O-Series Reasoning Model Normalization
 ;; ═══════════════════════════════════════════════════════════════
 
+(def ^:private o-series-pattern
+  "Regex matching O-series model base names (o1, o3, o4-mini, o3-pro, o-2024-12-17, etc.).
+   Catches current and future reasoning models. Matched against the base model
+   name after stripping provider path (e.g., 'openrouter/openai/o4-mini' -> 'o4-mini')."
+  #"o[\d\-][0-9a-z\-]*")
+
 (defn o-series?
   "Check if model is an OpenAI O-series reasoning model.
-   Matches: o1, o3, o- prefixed models (o1-mini, o3-2025-04-16, etc.)"
+   Matches: o1, o3, o4-mini, o3-pro, and future o-series models.
+   Handles provider-prefixed names like 'openrouter/openai/o1-mini'.
+   Returns strict boolean."
   [model]
-  (when model
-    (let [model-str (str model)]
-      (or (str/starts-with? model-str "o1")
-          (str/starts-with? model-str "o3")
-          (str/starts-with? model-str "o-")))))
+  (boolean
+   (when model
+     (re-matches o-series-pattern
+                 (last (str/split (str model) #"/"))))))
 
 (defn o1-preview?
-  "Specifically check for o1-preview models that reject more params."
+  "Check for o1-preview models. Deprecated July 2025, kept for self-hosted/proxy compat.
+   Handles provider-prefixed names. Returns strict boolean."
   [model]
-  (when model
-    (let [model-str (str model)]
-      (str/starts-with? model-str "o1-preview"))))
+  (boolean
+   (when model
+     (str/starts-with? (last (str/split (str model) #"/")) "o1-preview"))))
 
 (defn normalize-request
   "Normalize an OpenAI-compatible request for the target model.
-   Handles O-series schema changes (developer role, max_completion_tokens).
-   Preserves fields like include_search and plugins for upstream providers.
+   Handles O-series schema changes (developer role, max_completion_tokens,
+   unsupported param stripping). Preserves fields like include_search and
+   plugins for upstream providers.
    
    Options:
    - :o-series-compat - enable O-series normalization (default: true)
    - :loop-pinning - enable loop-specific overrides (default: false)
    - :pin-temp - temperature to use during loop turns
    - :pin-effort - reasoning_effort to use during loop turns
-   - :iteration - current iteration number (for loop pinning)"
+   - :iteration - current iteration number (for loop pinning)
+   
+   O-series models reject temperature, top_p, frequency_penalty, and other
+   sampling params. Stripping applies to ALL o-series models, not just o1-preview.
+   Loop pinning skips temperature for o-series (only reasoning_effort is pinned)."
   ([chat-req]
    (normalize-request chat-req {}))
   ([chat-req {:keys [o-series-compat loop-pinning pin-temp pin-effort iteration]
@@ -56,7 +69,6 @@
                    iteration 0}}]
    (let [model (:model chat-req)
          is-o-series (and o-series-compat (o-series? model))
-         is-o1-preview (and o-series-compat (o1-preview? model))
 
          ;; Apply O-series normalizations
          normalized
@@ -75,19 +87,22 @@
                             (not (contains? chat-req :max_completion_tokens)))
                  (assoc :max_completion_tokens (:max_tokens chat-req)))
                (dissoc :max_tokens)
-               ;; Strip unsupported params for o1-preview
-               (cond-> is-o1-preview
-                 (dissoc :temperature :top_p :frequency_penalty
-                         :presence_penalty :n :best_of :logprobs
-                         :top_logprobs :logit_bias :stop)))
+               ;; Strip unsupported params for ALL o-series models
+               ;; (temperature, top_p, frequency_penalty, etc. are rejected by the API)
+               (dissoc :temperature :top_p :frequency_penalty
+                       :presence_penalty :n :best_of :logprobs
+                       :top_logprobs :logit_bias :stop))
            chat-req)
 
          ;; Apply loop pinning if enabled and not final iteration
+         ;; Skip temperature for o-series (API rejects it) — only pin reasoning_effort
          pinned
          (if (and loop-pinning (> iteration 0))
-           (-> normalized
-               (assoc :temperature pin-temp)
-               (assoc :reasoning_effort pin-effort))
+           (cond-> normalized
+             (not is-o-series)
+             (assoc :temperature pin-temp)
+             :always
+             (assoc :reasoning_effort pin-effort))
            normalized)]
 
      ;; Ensure include_search and plugins are preserved
