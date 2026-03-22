@@ -65,22 +65,22 @@
           ];
 
           shellHook = ''
-            echo "mcp-injector Dev Environment"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "Babashka version: $(bb --version)"
-            echo ""
-            echo "Quick start:"
-            echo "  bb run          - Start the server"
-            echo "  bb test         - Run tests"
-            echo "  bb repl         - Start REPL"
-            echo ""
-            echo "  nix build       - Build the package"
-            echo "  nix run         - Run the built package"
-            echo ""
-            # Dev-only secret for tests. DO NOT use in production.
-            export INJECTOR_HMAC_SECRET="dev-mode-secret-do-not-use-in-production-at-least-32-chars"
+                   echo "mcp-injector Dev Environment"
+                   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                   echo "Babashka version: $(bb --version)"
+                   echo ""
+                   echo "Quick start:"
+                   echo "  bb run          - Start the server"
+                   echo "  bb test         - Run tests"
+                   echo "  bb repl         - Start REPL"
+                   echo ""
+                   echo "  nix build       - Build the package"
+                   echo "  nix run         - Run the built package"
+                   echo ""
+                   # Dev-only secret for tests. DO NOT use in production.
+                   export INJECTOR_HMAC_SECRET="dev-mode-secret-do-not-use-in-production-at-least-32-chars"
 
-	    export SHELL=''${OLDSHELL:-$SHELL}
+            export SHELL=''${OLDSHELL:-$SHELL}
           '';
         };
 
@@ -194,6 +194,28 @@
                     type = types.attrsOf (types.enum ["none" "restore" "block"]);
                     default = {};
                     description = "Trust levels for tools not managed by mcp-injector (e.g., OpenClaw tools).";
+                  };
+
+                  # Stage 7: O-series normalization and loop pinning
+                  oSeriesCompat = mkOption {
+                    type = types.bool;
+                    default = true;
+                    description = "Enable OpenAI o1/o3/o4 request normalization (system→developer role, max_tokens→max_completion_tokens).";
+                  };
+                  loopPinning = mkOption {
+                    type = types.bool;
+                    default = false;
+                    description = "Enable loop-specific overrides (pinning temperature/reasoning_effort) during agent iterations for tool-discovery turns.";
+                  };
+                  pinTemp = mkOption {
+                    type = types.float;
+                    default = 0.1;
+                    description = "Temperature value used when loopPinning is enabled and iteration > 0.";
+                  };
+                  pinEffort = mkOption {
+                    type = types.enum ["low" "medium" "high"];
+                    default = "low";
+                    description = "reasoning_effort value used when loopPinning is enabled and iteration > 0.";
                   };
                 };
               };

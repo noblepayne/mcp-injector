@@ -220,6 +220,19 @@
             (str model ": reasoning_effort should be pinned"))))))
 
 ;; ═══════════════════════════════════════════════════════════════
+;; Edge case tests
+;; ═══════════════════════════════════════════════════════════════
+
+(deftest normalize-request-empty-messages-test
+  (testing "Normalization handles nil or empty messages gracefully"
+    (let [req1 {:model "o1" :messages nil}
+          req2 {:model "o1" :messages []}
+          res1 (openai/normalize-request req1)
+          res2 (openai/normalize-request req2)]
+      (is (= [] (:messages res1)) "nil messages should become empty vector")
+      (is (= [] (:messages res2)) "empty messages should remain empty vector"))))
+
+;; ═══════════════════════════════════════════════════════════════
 ;; Extra field preservation tests
 ;; ═══════════════════════════════════════════════════════════════
 

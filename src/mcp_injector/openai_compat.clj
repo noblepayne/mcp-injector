@@ -21,7 +21,12 @@
 (def ^:private o-series-pattern
   "Regex matching O-series model base names (o1, o3, o4-mini, o3-pro, o-2024-12-17, etc.).
    Catches current and future reasoning models. Matched against the base model
-   name after stripping provider path (e.g., 'openrouter/openai/o4-mini' -> 'o4-mini')."
+   name after stripping provider path (e.g., 'openrouter/openai/o4-mini' -> 'o4-mini').
+   
+   Note: The pattern is intentionally broad and may match non-OpenAI models like 'o2'
+   if a provider uses that naming. This is acceptable — false positives only cause
+   extra normalization (role mapping, param stripping) which are safe. False negatives
+   (missing a real o-series) would cause 400 errors from the API."
   #"o[\d\-][0-9a-z\-]*")
 
 (defn o-series?
